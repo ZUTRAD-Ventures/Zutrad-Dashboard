@@ -26,6 +26,10 @@ npm install
 npm start
 ```
 
+### Schedule screen preview (no backend)
+
+The workspace's `.env.local` enables the Schedule screen's in-memory preview. Run `npm start` and open [http://localhost:3000/schedule](http://localhost:3000/schedule); in development, the preview supplies a local superadmin session and sample schedules without signing in or contacting the backend. Changes exist only in memory and reset on refresh. This preview is disabled in production builds.
+
 Build for production
 ```bash
 npm run build

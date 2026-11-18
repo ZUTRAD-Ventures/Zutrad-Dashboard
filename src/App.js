@@ -21,6 +21,7 @@ import AdminPage from "./scenes/admin/admin";
 import SuperAdminPage from "./scenes/superAdmin/superAdmin";
 import ClientMachinesPage from "./scenes/clientMachine/clientMachine";
 import ReportsPage from "./scenes/reports/reports";
+import SchedulePage from "./scenes/schedule/schedule";
 import MaintenancePage from "./scenes/maintenance/maintenance";
 import StorePage from "./scenes/store/store";
 // Charts
@@ -196,6 +197,8 @@ function App() {
 
           {/* Permission-gated — admins always through; others need the page granted */}
           <Route path="/reports"      element={protect(<ReportsPage />)} />
+          {/* Administrators and superadmins only — role is re-checked by the backend /schedules routes */}
+          <Route path="/schedule"     element={protectAdmin(<SchedulePage />)} />
           <Route path="/maintenance"  element={protect(<MaintenancePage />)} />
           <Route path="/supply"       element={protect(<SupplyPage />)} />
           <Route path="/store"        element={protect(<StorePage />)} />
