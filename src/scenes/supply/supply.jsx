@@ -6,6 +6,8 @@ import {
   Box, Typography, useTheme, Button, TextField, MenuItem,
   Collapse, IconButton, Snackbar, Alert, Stack, Tooltip, Chip,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
+  Table, TableHead, TableBody, TableRow, TableCell, TableContainer,
+  LinearProgress, CircularProgress, FormControlLabel, Checkbox,
 } from "@mui/material";
 import {
   DataGrid,
@@ -30,6 +32,10 @@ import NumbersOutlinedIcon        from "@mui/icons-material/NumbersOutlined";
 import LockOutlinedIcon           from "@mui/icons-material/LockOutlined";
 import ErrorOutlineIcon           from "@mui/icons-material/ErrorOutline";
 import DownloadOutlinedIcon       from "@mui/icons-material/DownloadOutlined";
+import UploadFileOutlinedIcon     from "@mui/icons-material/UploadFileOutlined";
+import CheckCircleOutlineIcon     from "@mui/icons-material/CheckCircleOutline";
+import WarningAmberOutlinedIcon   from "@mui/icons-material/WarningAmberOutlined";
+import SwapHorizOutlinedIcon      from "@mui/icons-material/SwapHorizOutlined";
 
 // ── logic ─────────────────────────────────────────────────────────────────────
 import { useSupply, fileIcon } from "./supply.logic";
@@ -77,6 +83,13 @@ const SupplyPage = () => {
     toast, closeToast,
     errorDialog, closeErrorDialog,
     canLogSupply, canDelete, canExport, canDownload,
+    importState, importParsing, importing, importProgress, importSummary,
+    skipDuplicates, setSkipDuplicates,
+    openImportIfAuthorised, closeImport, handleImportFile, confirmImport,
+    handleDownloadTemplate, isMock,
+    owed, totalOwed, owedOpen, setOwedOpen,
+    repayDialog, repaying, openRepay, closeRepay, changeRepay, confirmRepay,
+    canTransfer,
   } = useSupply();
 
   const { formatDate } = useDateFormat();
@@ -146,6 +159,31 @@ const SupplyPage = () => {
           {value ? formatDate(value) : "—"}
         </Typography>
       ),
+    },
+
+    {
+      field: "takenFrom",
+      headerName: "Taken From",
+      flex: 1,
+      valueGetter: (params) => params.row.takenFrom?.companyName || "",
+      renderCell: ({ row }) =>
+        row.takenFrom ? (
+          <Tooltip title={row.transferNote || "Taken from this client's holding"}>
+            <Chip
+              icon={<SwapHorizOutlinedIcon />}
+              label={row.takenFrom.companyName}
+              size="small"
+              sx={{
+                backgroundColor: colors.redAccent[800],
+                color: colors.redAccent[200],
+                fontSize: "11px", height: "22px",
+                "& .MuiChip-icon": { color: colors.redAccent[300], fontSize: "14px" },
+              }}
+            />
+          </Tooltip>
+        ) : (
+          <Typography color={colors.grey[600]} fontSize="12px">—</Typography>
+        ),
     },
 
     {
@@ -238,6 +276,12 @@ const SupplyPage = () => {
     <Box m="20px">
       <Header title="SUPPLY" subtitle="Goods Supplied to Clients" />
 
+      {isMock && (
+        <Alert severity="warning" sx={{ mb: "16px", fontSize: "12px" }}>
+          Preview mode: data is stored in memory only (REACT_APP_SUPPLY_MOCK). The /supply backend is not connected.
+        </Alert>
+      )}
+
       {/* ── stats bar ──────────────────────────────────────────────────────── */}
       <Stack direction="row" spacing={2} mt="24px" flexWrap="wrap" gap="12px">
         <StatCard
@@ -259,6 +303,13 @@ const SupplyPage = () => {
           label="Clients Served"
           value={uniqueClients}
           accent={colors.grey[400]}
+          colors={colors}
+        />
+        <StatCard
+          icon={<SwapHorizOutlinedIcon />}
+          label="Units Owed to Clients"
+          value={totalOwed.toLocaleString()}
+          accent={totalOwed > 0 ? colors.redAccent[400] : colors.grey[500]}
           colors={colors}
         />
       </Stack>
@@ -381,6 +432,35 @@ const SupplyPage = () => {
               </Box>
             )}
 
+            {/* ── optional: stock taken from another client's holding ─────── */}
+            <TextField
+              select variant="filled" label="Taken From (optional)" name="takenFromClientId"
+              value={form.takenFromClientId} onChange={handleChange}
+              fullWidth disabled={!canTransfer}
+              helperText={
+                canTransfer
+                  ? "Only if this stock was being held for another client"
+                  : "Administrator access required"
+              }
+            >
+              <MenuItem value="">— None (own / general stock) —</MenuItem>
+              {mockDataClients
+                .filter((c) => String(c.id) !== String(form.clientId))
+                .map((c) => (
+                  <MenuItem key={c.id} value={c.id}>{c.companyName}</MenuItem>
+                ))}
+            </TextField>
+            {form.takenFromClientId && (
+              <TextField
+                variant="filled" label="Why was it taken? (required)" name="transferNote"
+                value={form.transferNote} onChange={handleChange}
+                fullWidth sx={{ gridColumn: "span 2" }}
+                inputProps={{ maxLength: 300 }}
+                error={!!formError && !form.transferNote.trim()}
+                helperText="The client it was taken from will be recorded as owed this quantity until it is replaced."
+              />
+            )}
+
             <Box
               display="flex" alignItems="center" justifyContent="flex-end"
               gap="10px" sx={{ gridColumn: "span 3" }}
@@ -408,6 +488,101 @@ const SupplyPage = () => {
                   {formError}
                 </Alert>
               </Box>
+            )}
+          </Box>
+        </Collapse>
+      </Box>
+
+      {/* ── owed to clients ───────────────────────────────────────────────── */}
+      <Box
+        mb="16px"
+        backgroundColor={colors.primary[400]}
+        borderRadius="6px"
+        overflow="hidden"
+        borderLeft={`3px solid ${owed.length > 0 ? colors.redAccent[400] : colors.grey[600]}`}
+      >
+        <Box
+          display="flex" justifyContent="space-between" alignItems="center"
+          p="12px 16px" sx={{ cursor: "pointer" }}
+          onClick={() => setOwedOpen(!owedOpen)}
+        >
+          <Box display="flex" alignItems="center" gap="8px">
+            <SwapHorizOutlinedIcon sx={{ color: owed.length > 0 ? colors.redAccent[400] : colors.grey[500], fontSize: "18px" }} />
+            <Typography color={colors.grey[100]} fontWeight="600" fontSize="14px">
+              Owed to Clients
+            </Typography>
+            {owed.length > 0 && (
+              <Chip
+                label={`${owed.length} item${owed.length !== 1 ? "s" : ""} · ${totalOwed.toLocaleString()} units`}
+                size="small"
+                sx={{ backgroundColor: colors.redAccent[800], color: colors.redAccent[200], fontSize: "11px", height: "20px" }}
+              />
+            )}
+          </Box>
+          <IconButton size="small" sx={{ color: colors.grey[400] }}>
+            {owedOpen ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
+          </IconButton>
+        </Box>
+
+        <Collapse in={owedOpen}>
+          <Box borderTop={`1px solid ${colors.primary[300]}`} p="8px 16px 16px">
+            {owed.length === 0 ? (
+              <Typography color={colors.grey[500]} fontSize="13px" py="12px">
+                Nothing owed. When stock held for one client is supplied to another, it appears here until it is replaced.
+              </Typography>
+            ) : (
+              <TableContainer sx={{ maxHeight: 280 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      {["Client we owe", "Part Number", "Goods", "Owed", "Last Taken", ""].map((h) => (
+                        <TableCell
+                          key={h || "action"}
+                          sx={{ backgroundColor: colors.primary[400], color: colors.grey[300], fontSize: "11px", fontWeight: 700, borderBottom: `1px solid ${colors.primary[300]}` }}
+                        >
+                          {h}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {owed.map((o) => {
+                      const cell = { fontSize: "12px", color: colors.grey[100], borderBottom: `1px solid ${colors.primary[300]}` };
+                      return (
+                        <TableRow key={`${o.client?.id ?? o.client?._id}-${o.partNumber}`}>
+                          <TableCell sx={cell}>{o.client?.companyName}</TableCell>
+                          <TableCell sx={{ ...cell, fontFamily: "monospace" }}>{o.partNumber}</TableCell>
+                          <TableCell sx={cell}>{o.goodsSupplied}</TableCell>
+                          <TableCell sx={{ ...cell, color: colors.redAccent[300], fontWeight: 700 }}>
+                            -{Number(o.owed).toLocaleString()}
+                          </TableCell>
+                          <TableCell sx={{ ...cell, color: colors.grey[400] }}>
+                            {o.lastTakenAt ? formatDate(o.lastTakenAt) : "—"}
+                          </TableCell>
+                          <TableCell sx={{ ...cell, textAlign: "right" }}>
+                            <Tooltip title={canTransfer ? "" : "Administrator access required"}>
+                              <span>
+                                <Button
+                                  size="small" variant="outlined"
+                                  startIcon={<CheckCircleOutlineIcon />}
+                                  onClick={() => openRepay(o)}
+                                  sx={{
+                                    fontSize: "11px", textTransform: "none",
+                                    borderColor: canTransfer ? colors.greenAccent[600] : colors.grey[700],
+                                    color: canTransfer ? colors.greenAccent[400] : colors.grey[600],
+                                  }}
+                                >
+                                  Record repayment
+                                </Button>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
             )}
           </Box>
         </Collapse>
@@ -473,6 +648,24 @@ const SupplyPage = () => {
               <Box sx={{ width: "1px", height: "24px", backgroundColor: colors.grey[600] }} />
             </>
           )}
+
+          <Tooltip title={canLogSupply ? "Add many entries at once from an Excel or CSV file" : "Supply access required"}>
+            <span>
+              <Button
+                size="small" variant="contained"
+                startIcon={<UploadFileOutlinedIcon />}
+                onClick={openImportIfAuthorised}
+                sx={{
+                  backgroundColor: canLogSupply ? colors.greenAccent[700] : colors.grey[700],
+                  color: colors.grey[100],
+                  fontSize: "12px", textTransform: "none",
+                  "&:hover": { backgroundColor: canLogSupply ? colors.greenAccent[600] : colors.grey[700] },
+                }}
+              >
+                Import Excel
+              </Button>
+            </span>
+          </Tooltip>
 
           <Tooltip title={canExport ? "" : "Admin access required to export"}>
             <span>
@@ -575,6 +768,266 @@ const SupplyPage = () => {
           }}
         />
       </Box>
+
+      {/* ── excel import dialog ──────────────────────────────────────────── */}
+      <Dialog
+        open={importState.open}
+        onClose={closeImport}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{ sx: { backgroundColor: colors.primary[400] } }}
+      >
+        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "15px", fontWeight: 700 }}>
+          <UploadFileOutlinedIcon sx={{ color: colors.greenAccent[400] }} />
+          Import Supply from Excel
+        </DialogTitle>
+
+        <DialogContent>
+          {/* step 1 — choose file */}
+          {importState.rows.length === 0 && !importParsing && (
+            <Box display="flex" flexDirection="column" gap="14px" py="4px">
+              <Typography color={colors.grey[300]} fontSize="13px">
+                Upload an <b>.xlsx</b>, <b>.xls</b> or <b>.csv</b> file. The first row must be a header with these
+                columns (any order): <b>Goods Supplied, Part Number, Quantity, Client, Supply Date</b>.
+                Client names must match an existing client exactly. Dates can be DD/MM/YYYY or YYYY-MM-DD.
+                Optional columns: <b>Taken From</b> (the client whose held stock you used — they will be recorded as
+                owed) and <b>Transfer Note</b>.
+              </Typography>
+
+              <Box
+                component="label"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); handleImportFile(e.dataTransfer.files?.[0]); }}
+                sx={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: "8px",
+                  p: "28px", cursor: "pointer", borderRadius: "6px",
+                  border: `2px dashed ${colors.grey[600]}`,
+                  "&:hover": { borderColor: colors.greenAccent[400] },
+                }}
+              >
+                <UploadFileOutlinedIcon sx={{ fontSize: 36, color: colors.greenAccent[400] }} />
+                <Typography color={colors.grey[200]} fontSize="13px">
+                  Click to choose a file, or drag it here
+                </Typography>
+                <input
+                  type="file" hidden
+                  accept=".xlsx,.xls,.csv"
+                  onChange={(e) => { handleImportFile(e.target.files?.[0]); e.target.value = ""; }}
+                />
+              </Box>
+
+              {importState.error && (
+                <Alert severity="error" sx={{ fontSize: "12px" }}>
+                  {importState.fileName ? `${importState.fileName}: ` : ""}{importState.error}
+                </Alert>
+              )}
+
+              <Box>
+                <Button
+                  size="small" startIcon={<DownloadOutlinedIcon />}
+                  onClick={handleDownloadTemplate}
+                  sx={{ color: colors.blueAccent[300], textTransform: "none", fontSize: "12px" }}
+                >
+                  Download blank template
+                </Button>
+              </Box>
+            </Box>
+          )}
+
+          {/* parsing */}
+          {importParsing && (
+            <Box display="flex" alignItems="center" gap="12px" py="24px" justifyContent="center">
+              <CircularProgress size={20} color="secondary" />
+              <Typography color={colors.grey[300]} fontSize="13px">Reading {importState.fileName}…</Typography>
+            </Box>
+          )}
+
+          {/* step 2 — preview */}
+          {importState.rows.length > 0 && (
+            <Box display="flex" flexDirection="column" gap="12px">
+              <Typography color={colors.grey[300]} fontSize="13px">
+                <b>{importState.fileName}</b> — {importSummary.total.toLocaleString()} row{importSummary.total !== 1 ? "s" : ""} found
+              </Typography>
+
+              <Box display="flex" gap="8px" flexWrap="wrap">
+                <Chip
+                  icon={<CheckCircleOutlineIcon />}
+                  label={`${importSummary.toImport.toLocaleString()} ready to import`}
+                  size="small"
+                  sx={{ backgroundColor: colors.greenAccent[800], color: colors.greenAccent[200] }}
+                />
+                {importSummary.transfers > 0 && (
+                  <Chip
+                    icon={<SwapHorizOutlinedIcon />}
+                    label={`${importSummary.transfers} taken from another client`}
+                    size="small"
+                    sx={{ backgroundColor: colors.blueAccent[800], color: colors.blueAccent[200] }}
+                  />
+                )}
+                {importSummary.invalid > 0 && (
+                  <Chip
+                    icon={<ErrorOutlineIcon />}
+                    label={`${importSummary.invalid} with errors (skipped)`}
+                    size="small"
+                    sx={{ backgroundColor: colors.redAccent[800], color: colors.redAccent[200] }}
+                  />
+                )}
+                {importSummary.duplicates > 0 && (
+                  <Chip
+                    icon={<WarningAmberOutlinedIcon />}
+                    label={`${importSummary.duplicates} possible duplicate${importSummary.duplicates !== 1 ? "s" : ""}`}
+                    size="small"
+                    sx={{ backgroundColor: colors.grey[700], color: colors.grey[100] }}
+                  />
+                )}
+              </Box>
+
+              {importState.missingColumns.length > 0 && (
+                <Alert severity="warning" sx={{ fontSize: "12px" }}>
+                  Column(s) not found: {importState.missingColumns.join(", ")}. Rows will be marked as errors until they are added.
+                </Alert>
+              )}
+
+              {importSummary.duplicates > 0 && (
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small" checked={skipDuplicates}
+                      onChange={(e) => setSkipDuplicates(e.target.checked)}
+                      sx={{ color: `${colors.greenAccent[300]} !important` }}
+                    />
+                  }
+                  label={<Typography fontSize="12px" color={colors.grey[300]}>Skip rows that already exist (same goods, part, qty, client and date)</Typography>}
+                />
+              )}
+
+              <TableContainer sx={{ maxHeight: 340, border: `1px solid ${colors.primary[300]}`, borderRadius: "4px" }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow>
+                      {["Row", "Goods Supplied", "Part No.", "Qty", "Client", "Taken From", "Date", "Status"].map((h) => (
+                        <TableCell key={h} sx={{ backgroundColor: colors.blueAccent[700], color: colors.grey[100], fontSize: "11px", fontWeight: 700 }}>
+                          {h}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {importState.rows.slice(0, 200).map((r) => {
+                      const bad = r.errors.length > 0;
+                      const cell = { fontSize: "12px", color: bad ? colors.grey[500] : colors.grey[100], borderBottom: `1px solid ${colors.primary[300]}` };
+                      return (
+                        <TableRow key={r.rowNum} sx={bad ? { backgroundColor: `${colors.redAccent[900]}66` } : undefined}>
+                          <TableCell sx={cell}>{r.rowNum}</TableCell>
+                          <TableCell sx={cell}>{r.data.goodsSupplied || "—"}</TableCell>
+                          <TableCell sx={cell}>{r.data.partNumber || "—"}</TableCell>
+                          <TableCell sx={cell}>{r.data.quantity ?? "—"}</TableCell>
+                          <TableCell sx={cell}>{r.data.clientName || "—"}</TableCell>
+                          <TableCell sx={cell}>{r.data.takenFromName || "—"}</TableCell>
+                          <TableCell sx={cell}>{r.data.supplyDate ? formatDate(r.data.supplyDate) : "—"}</TableCell>
+                          <TableCell sx={{ ...cell, color: bad ? colors.redAccent[300] : r.duplicate ? colors.grey[300] : colors.greenAccent[300] }}>
+                            {bad ? r.errors.join("; ") : r.duplicate ? "Possible duplicate" : "OK"}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              {importState.rows.length > 200 && (
+                <Typography color={colors.grey[500]} fontSize="11px">
+                  Showing the first 200 of {importState.rows.length.toLocaleString()} rows. All valid rows will be imported.
+                </Typography>
+              )}
+
+              {importing && (
+                <Box>
+                  <LinearProgress variant="determinate" value={importProgress} color="secondary" />
+                  <Typography color={colors.grey[400]} fontSize="11px" mt="4px">Importing… {importProgress}%</Typography>
+                </Box>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ px: "24px", pb: "16px", gap: "8px" }}>
+          <Button size="small" onClick={closeImport} disabled={importing} sx={{ color: colors.grey[400], textTransform: "none" }}>
+            Cancel
+          </Button>
+          {importState.rows.length > 0 && (
+            <>
+              <Button
+                size="small" variant="outlined" component="label" disabled={importing}
+                sx={{ borderColor: colors.grey[600], color: colors.grey[300], textTransform: "none" }}
+              >
+                Choose different file
+                <input
+                  type="file" hidden accept=".xlsx,.xls,.csv"
+                  onChange={(e) => { handleImportFile(e.target.files?.[0]); e.target.value = ""; }}
+                />
+              </Button>
+              <Button
+                size="small" variant="contained" color="secondary"
+                disabled={importing || importSummary.toImport === 0}
+                onClick={confirmImport}
+                sx={{ textTransform: "none" }}
+              >
+                Import {importSummary.toImport.toLocaleString()} entr{importSummary.toImport === 1 ? "y" : "ies"}
+              </Button>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* ── record repayment dialog ──────────────────────────────────────── */}
+      <Dialog
+        open={repayDialog.open}
+        onClose={closeRepay}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: { backgroundColor: colors.primary[400] } }}
+      >
+        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "15px", fontWeight: 700 }}>
+          <CheckCircleOutlineIcon sx={{ color: colors.greenAccent[400] }} />
+          Record repayment
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ color: colors.grey[300], fontSize: "13px", mb: "14px" }}>
+            Stock replaced for{" "}
+            <b>{repayDialog.item?.client?.companyName}</b> —{" "}
+            <b>{repayDialog.item?.partNumber}</b> (currently owed: {repayDialog.item?.owed}).
+          </DialogContentText>
+          <Box display="flex" flexDirection="column" gap="12px">
+            <TextField
+              variant="filled" label="Quantity replaced" type="number" fullWidth
+              value={repayDialog.quantity}
+              onChange={(e) => changeRepay("quantity", e.target.value)}
+              inputProps={{ min: 1, max: repayDialog.item?.owed }}
+            />
+            <TextField
+              variant="filled" label="Note (optional)" fullWidth
+              value={repayDialog.note}
+              onChange={(e) => changeRepay("note", e.target.value)}
+              inputProps={{ maxLength: 300 }}
+            />
+            {repayDialog.error && (
+              <Alert severity="error" sx={{ fontSize: "12px", py: "2px" }}>{repayDialog.error}</Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: "24px", pb: "16px", gap: "8px" }}>
+          <Button size="small" onClick={closeRepay} disabled={repaying} sx={{ color: colors.grey[400], textTransform: "none" }}>
+            Cancel
+          </Button>
+          <Button
+            size="small" variant="contained" color="secondary"
+            onClick={confirmRepay} disabled={repaying}
+            sx={{ textTransform: "none" }}
+          >
+            {repaying ? "Saving…" : "Record repayment"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ── download confirmation dialog ─────────────────────────────────── */}
       <Dialog

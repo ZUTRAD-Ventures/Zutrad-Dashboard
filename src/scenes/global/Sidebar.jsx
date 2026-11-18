@@ -15,6 +15,7 @@ import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
 import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
 import StorefrontOutlinedIcon from "@mui/icons-material/StorefrontOutlined";
 import LocalShippingOutlinedIcon from "@mui/icons-material/LocalShippingOutlined";
+import EventNoteOutlinedIcon from "@mui/icons-material/EventNoteOutlined";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import ExpandLessOutlinedIcon from "@mui/icons-material/ExpandLessOutlined";
 import VerifiedUserOutlinedIcon from "@mui/icons-material/VerifiedUserOutlined";
@@ -34,6 +35,7 @@ const getMenuKeyFromPath = (pathname) => {
   if (pathname === "/users") return "Manage Team";
   if (pathname === "/clients-list") return "Clients";
   if (pathname === "/reports") return "Reports";
+  if (pathname === "/schedule") return "Schedule";
   if (pathname === "/supply") return "Supply / Invoices";
   if (pathname === "/store") return "Store";
   if (pathname === "/machines") return "Client Machines";
@@ -293,6 +295,10 @@ const Sidebar = ({ currentUser }) => {
           <Item title="Manage Team" to="/users" icon={<PeopleOutlinedIcon />} selected={selected} setSelected={setSelected} isCollapsed={isCollapsed} />
           <Item title="Clients" to="/clients-list" icon={<ContactsOutlinedIcon />} selected={selected} setSelected={setSelected} isCollapsed={isCollapsed} />
           <Item title="Reports" to="/reports" icon={<ReceiptOutlinedIcon />} selected={selected} setSelected={setSelected} isCollapsed={isCollapsed} badgeCount={pendingReportCount} badgeColor="warn" />
+          {/* Schedule — admins/superadmins only; sits between Reports and Supply */}
+          {isAdmin && (
+            <Item title="Schedule" to="/schedule" icon={<EventNoteOutlinedIcon />} selected={selected} setSelected={setSelected} isCollapsed={isCollapsed} />
+          )}
           <Item title="Supply / Invoices" to="/supply" icon={<LocalShippingOutlinedIcon />} selected={selected} setSelected={setSelected} isCollapsed={isCollapsed} />
           <Item title="Store" to="/store" icon={<StorefrontOutlinedIcon />} selected={selected} setSelected={setSelected} isCollapsed={isCollapsed} />
 
