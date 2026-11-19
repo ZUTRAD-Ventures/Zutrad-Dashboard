@@ -35,6 +35,11 @@ import DeleteOutlineOutlinedIcon from "@mui/icons-material/DeleteOutlineOutlined
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import AttachFileOutlinedIcon from "@mui/icons-material/AttachFileOutlined";
+import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
+import PictureAsPdfOutlinedIcon from "@mui/icons-material/PictureAsPdfOutlined";
+import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
+import TableChartOutlinedIcon from "@mui/icons-material/TableChartOutlined";
+import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
 import Header from "../../components/Header";
 import {
   STATUS_TABS,
@@ -46,6 +51,20 @@ import {
   useReportsPage,
 } from "./reports.logic";
 import { useDateFormat } from "../settings/dateFormat.logic";
+
+/* =========================================================================
+   FILE ICON — picks an icon from the file extension.
+   Lives in this UI file (not reports.logic) so the logic file never has to
+   import icons/JSX, matching how statusIconMap is handled.
+   ========================================================================= */
+
+const fileIcon = (filename) => {
+  const ext = (filename ?? "").split(".").pop()?.toLowerCase();
+  if (ext === "pdf") return PictureAsPdfOutlinedIcon;
+  if (ext === "doc" || ext === "docx") return DescriptionOutlinedIcon;
+  if (ext === "xls" || ext === "xlsx") return TableChartOutlinedIcon;
+  return InsertDriveFileOutlinedIcon; // fallback for any other type
+};
 
 /* =========================================================================
    STAT CARD — small presentational sub-component for the 4 stat tiles
@@ -104,10 +123,14 @@ const ReportsPage = () => {
     handleChange,
     handleSubmit,
     handleCancelForm,
-    files,
-    handleAddFiles,
-    handleRemoveFile,
-    handleDownloadAttachment,
+    attachments,
+    handleFileChange,
+    removeAttachment,
+    setAttachments,
+    handleFileClick,
+    downloadDialog,
+    closeDownloadDialog,
+    handleDownloadConfirm,
     handleApprove,
     handleDelete,
     handleExport,
@@ -127,6 +150,7 @@ const ReportsPage = () => {
     canModerate,
     canExport,
     canDelete,
+    canDownload,
   } = useReportsPage();
   const { formatDate } = useDateFormat();
 
@@ -195,43 +219,61 @@ const ReportsPage = () => {
               type="number" value={form.lineNumber} onChange={handleChange} fullWidth
               error={!!formError && !form.lineNumber}
             />
-            {/* attachments — pick or drag files, shown as removable chips */}
-            <Box sx={{ gridColumn: "span 2" }}>
-              <Box
+            {/* ── file attachments: real file picker ─────────────────────── */}
+            <Box sx={{ gridColumn: "span 2" }} display="flex" alignItems="center" gap="8px">
+              {/* component="label" renders the Button as a <label>, so clicking
+                  it opens the hidden <input type="file"> inside it. No ref needed
+                  and no ugly native file input. */}
+              <Button
                 component="label"
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => { e.preventDefault(); handleAddFiles(e.dataTransfer.files); }}
+                variant="outlined"
+                startIcon={<AttachFileOutlinedIcon />}
                 sx={{
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
-                  p: "14px", cursor: "pointer", borderRadius: "6px",
-                  border: `2px dashed ${colors.grey[600]}`,
-                  "&:hover": { borderColor: colors.greenAccent[400] },
+                  height: "56px", flex: 1,
+                  borderColor: colors.grey[600], color: colors.grey[300],
+                  textTransform: "none", fontSize: "13px",
+                  justifyContent: "flex-start", px: "14px",
                 }}
               >
-                <AttachFileOutlinedIcon sx={{ fontSize: 20, color: colors.greenAccent[400] }} />
-                <Typography color={colors.grey[300]} fontSize="13px">
-                  Attach files (click or drag here) — up to {MAX_FILES} files, 100 MB each
-                </Typography>
-                <input
-                  type="file" hidden multiple
-                  onChange={(e) => { handleAddFiles(e.target.files); e.target.value = ""; }}
-                />
-              </Box>
-              {files.length > 0 && (
-                <Box display="flex" flexWrap="wrap" gap="8px" mt="10px">
-                  {files.map((f, i) => (
-                    <Chip
-                      key={`${f.name}-${f.size}-${f.lastModified}`}
-                      icon={<AttachFileOutlinedIcon />}
-                      label={`${f.name} (${formatFileSize(f.size)})`}
-                      size="small"
-                      onDelete={() => handleRemoveFile(i)}
-                      sx={{ backgroundColor: colors.primary[300], color: colors.grey[100], maxWidth: "100%" }}
-                    />
-                  ))}
-                </Box>
+                {attachments.length > 0
+                  ? `${attachments.length} file${attachments.length !== 1 ? "s" : ""} selected`
+                  : "Attach Files (optional)"}
+                {/* "multiple" allows several files at once; "hidden" hides the native input */}
+                <input type="file" multiple hidden onChange={handleFileChange} />
+              </Button>
+              {attachments.length > 0 && (
+                <Tooltip title="Clear all selected files">
+                  <IconButton
+                    size="small"
+                    onClick={() => setAttachments([])}
+                    sx={{ color: colors.redAccent[400] }}
+                  >
+                    <DeleteOutlineOutlinedIcon sx={{ fontSize: "18px" }} />
+                  </IconButton>
+                </Tooltip>
               )}
             </Box>
+
+            {/* Chips show the chosen files so the user can confirm (or remove
+                individual files) before submitting */}
+            {attachments.length > 0 && (
+              <Box sx={{ gridColumn: "span 2", display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                {attachments.map((f, i) => (
+                  <Chip
+                    key={`${f.name}-${i}`}
+                    label={f.name}
+                    size="small"
+                    onDelete={() => removeAttachment(i)}
+                    sx={{
+                      backgroundColor: colors.blueAccent[800],
+                      color: colors.blueAccent[200],
+                      fontSize: "11px",
+                    }}
+                  />
+                ))}
+              </Box>
+            )}
+
             {formError && (
               <Box sx={{ gridColumn: "span 2" }}>
                 <Alert severity="error" sx={{ fontSize: "12px", py: "2px" }}>{formError}</Alert>
@@ -408,20 +450,38 @@ const ReportsPage = () => {
                     {report.reportDetails}
                   </Typography>
 
-                  {/* attachments — click a chip to download */}
-                  {report.attachments?.length > 0 && (
-                    <Box display="flex" flexWrap="wrap" gap="8px" mb="12px">
-                      {report.attachments.map((a) => (
-                        <Tooltip key={a.storedName} title="Download">
-                          <Chip
-                            icon={<AttachFileOutlinedIcon />}
-                            label={`${a.name} (${formatFileSize(a.size)})`}
-                            size="small"
-                            onClick={() => handleDownloadAttachment(report.id, a)}
-                            sx={{ backgroundColor: colors.primary[300], color: colors.grey[100], cursor: "pointer", maxWidth: "100%" }}
-                          />
-                        </Tooltip>
-                      ))}
+                  {/* attachments — one icon per file. Admins can click to download;
+                      everyone else sees a disabled icon (same lock pattern as delete).
+                      Reports created before this feature have no `attachments`, hence `|| []`. */}
+                  {(report.attachments || []).length > 0 && (
+                    <Box display="flex" alignItems="center" flexWrap="wrap" gap="4px" mb="12px">
+                      <AttachFileOutlinedIcon sx={{ fontSize: "14px", color: colors.grey[500] }} />
+                      {report.attachments.map((file, i) => {
+                        const Icon = fileIcon(file.name);
+                        return canDownload ? (
+                          <Tooltip key={i} title={`Download: ${file.name}`}>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleFileClick(file)}
+                              sx={{
+                                color: colors.blueAccent[300],
+                                "&:hover": { color: colors.blueAccent[100] },
+                              }}
+                            >
+                              <Icon sx={{ fontSize: "18px" }} />
+                            </IconButton>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip key={i} title={`${file.name} (admin access required to download)`}>
+                            {/* <span> needed: MUI tooltips don't fire on disabled buttons */}
+                            <span>
+                              <IconButton size="small" disabled sx={{ color: colors.grey[600] }}>
+                                <Icon sx={{ fontSize: "18px" }} />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        );
+                      })}
                     </Box>
                   )}
 
@@ -524,6 +584,48 @@ const ReportsPage = () => {
       {/* ----------------------------------------------------------------
           ACCESS DENIED / ERROR DIALOG
           ---------------------------------------------------------------- */}
+      {/* ── download confirmation dialog ─────────────────────────────────── */}
+      <Dialog
+        open={downloadDialog.open}
+        onClose={closeDownloadDialog}
+        PaperProps={{ sx: { backgroundColor: colors.primary[400], minWidth: 340 } }}
+      >
+        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: "10px", color: colors.grey[100], fontSize: "15px", fontWeight: 700 }}>
+          <DownloadOutlinedIcon sx={{ color: colors.blueAccent[300] }} />
+          Download File
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ color: colors.grey[300], fontSize: "13px" }}>
+            Download{" "}
+            <Typography component="span" fontWeight={700} color={colors.greenAccent[300]}>
+              {downloadDialog.file?.name}
+            </Typography>
+            ?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: "24px", pb: "16px", gap: "8px" }}>
+          <Button
+            size="small" onClick={closeDownloadDialog}
+            sx={{ color: colors.grey[400], textTransform: "none" }}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="small" variant="contained"
+            startIcon={<DownloadOutlinedIcon />}
+            onClick={handleDownloadConfirm}
+            sx={{
+              backgroundColor: colors.blueAccent[700],
+              color: colors.blueAccent[100],
+              textTransform: "none",
+              "&:hover": { backgroundColor: colors.blueAccent[600] },
+            }}
+          >
+            Download
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={errorDialog.open} onClose={closeErrorDialog} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <ErrorOutlineIcon sx={{ color: colors.redAccent[400] }} />

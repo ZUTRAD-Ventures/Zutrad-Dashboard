@@ -1,3 +1,6 @@
+// LOCAL TESTING ONLY: does nothing unless REACT_APP_REPORTS_MOCK=true in dev.
+// Kept as the FIRST import so the fake session exists before anything reads it.
+import "./reports.preview";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { formatDate } from "../../utils/dateFormat";
 import { getCurrentUser, getToken, hasPermission, isAdminOrSuper, isSuperAdmin } from "../../utils/auth";
@@ -10,9 +13,32 @@ const authHeaders = () => ({
   Authorization: `Bearer ${getToken()}`,
 });
 
-// For multipart requests: do NOT set Content-Type, the browser adds the
-// multipart boundary itself.
-const authOnlyHeaders = () => ({ Authorization: `Bearer ${getToken()}` });
+// Auth header WITHOUT Content-Type — used for FormData (file upload) requests.
+// WHY: when the body is a FormData, the browser must generate the
+// "multipart/form-data; boundary=..." header itself. If we set Content-Type
+// manually the boundary is lost and the server (multer) rejects the request.
+const authBearer = () => ({
+  Authorization: `Bearer ${getToken()}`,
+});
+
+// Safely parse a fetch Response as JSON.
+// WHY: if the server crashes or a proxy returns an HTML error page, calling
+// res.json() throws "unexpected character at line 1" and hides the real error.
+// This returns {} instead, so callers can always read `data.message` safely.
+const safeJson = async (res) => {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
+};
+
+// Client-side upload limits. These give instant feedback before the upload,
+// but the SERVER must enforce its own limits too (never trust the client).
+// Adjust to match your multer config.
+const MAX_FILES = 5;
+const MAX_FILE_SIZE_MB = 10;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 /* =========================================================================
    CONFIG
@@ -78,7 +104,7 @@ const normalizeClient = (c) => ({ ...c, id: c._id ?? c.id });
    ========================================================================= */
 
 export const exportReportsCSV = (reports) => {
-  const headers = ["ID", "Client", "Line", "Filed By", "Date", "Status", "Details"];
+  const headers = ["ID", "Client", "Line", "Filed By", "Date", "Status", "Details", "Attachments"];
   const rows = reports.map((r) => [
     r.id ?? r._id,
     r.client?.companyName ?? "",
@@ -87,6 +113,8 @@ export const exportReportsCSV = (reports) => {
     formatDate(r.createdAt),
     r.status,
     r.reportDetails.replace(/"/g, '""'),
+    // Only the original file names go in the CSV (not the files themselves)
+    (r.attachments || []).map((f) => f.name).join("; "),
   ]);
   const content = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
@@ -112,6 +140,9 @@ export const useReportsPage = () => {
   const canModerate = isAdminOrSuper();
   const canExport = isAdminOrSuper();
   const canDelete = isSuperAdmin();
+  // canDownload: administrator or superadmin only (download attachments).
+  // Change this line if regular users should also be able to download.
+  const canDownload = isAdminOrSuper();
 
   // ---- raw state ----------------------------------------------------------
   const [reports, setReports] = useState([]);
@@ -151,6 +182,16 @@ export const useReportsPage = () => {
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [files, setFiles] = useState([]); // File objects chosen for the new report
+
+  // Real File objects chosen via <input type="file">.
+  // We store the File objects themselves (not just names) because FormData
+  // needs them at submit time to send the actual bytes to the server.
+  const [attachments, setAttachments] = useState([]);
+
+  // ---- download confirmation dialog ----------------------------------------
+  // `file` is one entry from report.attachments: { name, storedName }
+  const [downloadDialog, setDownloadDialog] = useState({ open: false, file: null });
+  const closeDownloadDialog = () => setDownloadDialog({ open: false, file: null });
 
   // ---- toast helpers -------------------------------------------------------
   const showToast = (message, severity = "success") =>
@@ -227,16 +268,44 @@ export const useReportsPage = () => {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const resetForm = () => {
-    setForm({ reportDetails: "", lineNumber: "", clientId: "" });
-    setFiles([]);
+  // Runs when the user picks files in the native file dialog.
+  const handleFileChange = (e) => {
     setFormError("");
+
+    // e.target.files is a FileList (array-like, not a real array),
+    // so Array.from converts it for .filter/.map/spread.
+    const picked = Array.from(e.target.files || []);
+
+    // IMPORTANT: clear the input's value so picking the SAME file again
+    // (e.g. after removing it with the chip's X) still fires onChange.
+    // Browsers ignore a selection identical to the previous one otherwise.
+    e.target.value = "";
+
+    // Reject oversized files up front, with a clear message
+    const tooBig = picked.find((f) => f.size > MAX_FILE_SIZE_BYTES);
+    if (tooBig) {
+      setFormError(`"${tooBig.name}" is larger than ${MAX_FILE_SIZE_MB} MB.`);
+      return;
+    }
+
+    // Append to the existing selection (instead of replacing it) so the
+    // user can add files in several rounds, then enforce the max count.
+    const combined = [...attachments, ...picked];
+    if (combined.length > MAX_FILES) {
+      setFormError(`You can attach at most ${MAX_FILES} files.`);
+      return;
+    }
+    setAttachments(combined);
   };
 
-  // ---- attachment handlers -------------------------------------------------
-  const handleAddFiles = (fileList) => {
-    const incoming = Array.from(fileList || []);
-    if (incoming.length === 0) return;
+  // Removes a single file from the selection (used by the chip's delete "X")
+  const removeAttachment = (index) =>
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+
+  const resetForm = () => {
+    setForm({ reportDetails: "", lineNumber: "", clientId: "" });
+    // Clear files too, otherwise they'd leak into the next report
+    setAttachments([]);
     setFormError("");
 
     const tooBig = incoming.filter((f) => f.size > MAX_FILE_SIZE);
@@ -306,19 +375,27 @@ export const useReportsPage = () => {
 
     setSubmitting(true);
     try {
-      // multipart/form-data so files can travel with the report
-      const body = new FormData();
-      body.append("reportDetails", reportDetails);
-      body.append("lineNumber", Number(lineNumber));
-      body.append("clientId", clientId);
-      files.forEach((f) => body.append("files", f));
+      // Switched from JSON to multipart/form-data so files can be uploaded.
+      // FormData sends everything as strings, so the server must convert
+      // lineNumber back to a number (Number(req.body.lineNumber)).
+      const fd = new FormData();
+      fd.append("reportDetails", reportDetails);
+      fd.append("lineNumber", lineNumber);
+      fd.append("clientId", clientId);
+
+      // Append every file under the SAME key "files". This key must match
+      // the backend: multer's upload.array("files").
+      attachments.forEach((file) => fd.append("files", file));
 
       const res = await fetch(`${API_BASE}/reports`, {
         method: "POST",
-        headers: authOnlyHeaders(),
-        body,
+        // authBearer (NOT authHeaders): no Content-Type, so the browser can
+        // add the multipart boundary itself.
+        headers: authBearer(),
+        body: fd,
       });
-      const data = await res.json();
+      // safeJson: don't crash on non-JSON error pages (e.g. 502, missing multer)
+      const data = await safeJson(res);
       if (!res.ok) throw new Error(data.message || "Failed to submit report.");
 
       setReports((prev) => [normalizeReport(data), ...prev]);
@@ -451,6 +528,59 @@ export const useReportsPage = () => {
     closeConfirmDialog();
   };
 
+  // ---- attachment download handlers -----------------------------------------
+
+  // Step 1: user clicks a file icon -> check permission, then ask to confirm.
+  const handleFileClick = (file) => {
+    if (!canDownload) {
+      showErrorDialog(
+        "Access Denied",
+        "Only administrators and superadmins can download attachments."
+      );
+      return;
+    }
+    setDownloadDialog({ open: true, file });
+  };
+
+  // Step 2: user confirms -> fetch the file as a blob and trigger a download.
+  const handleDownloadConfirm = async () => {
+    // `name` is the original filename (what the user sees);
+    // `storedName` is the unique name on the server's disk (used in the URL).
+    const { name, storedName } = downloadDialog.file ?? {};
+    closeDownloadDialog();
+
+    if (!storedName) {
+      showErrorDialog("File Not Available", "This attachment has no stored file to download.");
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/reports/files/${encodeURIComponent(storedName)}`,
+        { headers: authBearer() } // the file route is auth-protected
+      );
+
+      if (!res.ok) {
+        // Errors from our API are JSON, so parse them safely for a message
+        const body = await safeJson(res);
+        throw new Error(body.message || `Download failed (${res.status}).`);
+      }
+
+      // On success the response is the raw file bytes, NOT JSON
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);   // temporary in-memory URL
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name ?? storedName;         // filename the user will see
+      document.body.appendChild(a);
+      a.click();                               // starts the browser download
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);                // free the memory
+    } catch (err) {
+      showErrorDialog("Download Failed", err.message);
+    }
+  };
+
   // ---- gated export handler — admin/superadmin only -------------------------
   const handleExport = () => {
     if (!canExport) {
@@ -491,11 +621,17 @@ export const useReportsPage = () => {
     handleSubmit,
     handleCancelForm,
 
-    // attachments
-    files,
-    handleAddFiles,
-    handleRemoveFile,
-    handleDownloadAttachment,
+    // attachments (upload)
+    attachments,
+    handleFileChange,
+    removeAttachment,
+    setAttachments,
+
+    // attachments (download)
+    handleFileClick,
+    downloadDialog,
+    closeDownloadDialog,
+    handleDownloadConfirm,
 
     // status actions
     handleApprove,
@@ -529,5 +665,6 @@ export const useReportsPage = () => {
     canModerate,
     canExport,
     canDelete,
+    canDownload,
   };
-};
+}
