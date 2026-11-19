@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { hasPermission, isAdminOrSuper, isSuperAdmin } from "../../utils/auth";
 import { formatDate } from "../../utils/dateFormat";
 import { notifyStoreChanged } from "../../utils/eventbus";
-import { isStorePreview } from "./store.preview";
 import { parseStoreFile, downloadStoreTemplate } from "./store.excel";
 import { fetchOwedList, repayOwed, owedByPart, partKey, canRecordTransfers } from "../supply/supply.owed";
 
@@ -24,12 +23,6 @@ const safeJson = async (res) => {
     return { message: "Server returned an unexpected response. Check the backend console." };
   }
 };
-
-// DEV-ONLY preview switch — see store.preview.jsx (REACT_APP_STORE_MOCK=true,
-// or REACT_APP_SUPPLY_MOCK=true). When on, the Store uses an in-memory parts
-// list and the in-memory owed ledger, so you can test "owed stock" without the
-// backend. Resets on refresh.
-const USE_MOCK = isStorePreview;
 
 /* =========================================================================
    BACKEND GUIDE — SHOWING & SETTLING "OWED TO CLIENTS" ON THE STORE PAGE
@@ -152,19 +145,6 @@ export const MACHINE_TYPES = ["Macsa ID", "Savema", "Sojet", "BestCode"];
 export const ALL_TAB_INDEX = MACHINE_TYPES.length; // "All" tab sits after the machine tabs
 export const LOW_STOCK_THRESHOLD = 2;
 
-// ── mock parts (preview only) ───────────────────────────────────────────────
-// Part numbers match the Supply preview data so owed stock links up (CF-77 is
-// seeded as owed on the Supply page).
-const daysAgoISO = (n) => new Date(Date.now() - n * 86400000).toISOString();
-let mockItems = [
-  { _id: "p1", serialNumber: "SN-1001", partNumber: "PR-1001", machinePart: "Printer ribbon",  machine: "Macsa ID", quantity: 14, updatedAt: daysAgoISO(2) },
-  { _id: "p2", serialNumber: "SN-1002", partNumber: "IC-2040", machinePart: "Ink cartridge",   machine: "Macsa ID", quantity: 3,  updatedAt: daysAgoISO(5) },
-  { _id: "p3", serialNumber: "SN-1003", partNumber: "CF-77",   machinePart: "Cleaning fluid",  machine: "Savema",   quantity: 4,  updatedAt: daysAgoISO(1) },
-  { _id: "p4", serialNumber: "SN-1004", partNumber: "TP-310",  machinePart: "Thermal printhead", machine: "Sojet",  quantity: 1,  updatedAt: daysAgoISO(9) },
-  { _id: "p5", serialNumber: "SN-1005", partNumber: "DB-228",  machinePart: "Drive belt",      machine: "BestCode", quantity: 8,  updatedAt: daysAgoISO(3) },
-];
-const mockDelay = (ms = 250) => new Promise((r) => setTimeout(r, ms));
-
 /* =========================================================================
    CSV EXPORT HELPERS
    ========================================================================= */
@@ -184,6 +164,7 @@ const downloadCsv = (rows, filename) => {
     "Part Number",
     "Description",
     "Machine",
+    "Client",
     "Quantity",
     "Last Updated",
   ];
@@ -196,6 +177,7 @@ const downloadCsv = (rows, filename) => {
         r.partNumber,
         r.machinePart,
         r.machine,
+        r.client?.companyName ?? "",
         r.quantity,
         formatDate(r.updatedAt),
       ]
@@ -244,6 +226,8 @@ export const useStorePage = () => {
 
   // owed: [{ client, partNumber, goodsSupplied, owed, lastTakenAt }] from GET /supply/owed
   const [owed, setOwed] = useState([]);
+  // Real clients for the "Client" dropdown and for checking the import file.
+  const [clients, setClients] = useState([]);
   // settleDialog.options: [{ clientId, companyName, owed, quantity (string) }]
   const [settleDialog, setSettleDialog] = useState({
     open: false, partNumber: "", description: "", restocked: null, options: [], error: "",
@@ -260,6 +244,7 @@ export const useStorePage = () => {
     machinePart: "",
     machine: MACHINE_TYPES[0],
     quantity: "",
+    clientId: "", // optional: the client this part belongs to
   });
 
   // ---- error / access-denied dialog ------------------------------------------
@@ -287,11 +272,6 @@ export const useStorePage = () => {
     setLoading(true);
     setLoadError("");
     try {
-      if (USE_MOCK) {
-        await mockDelay();
-        setItems(mockItems);
-        return;
-      }
       const res = await fetch(`${API_BASE}/store`, { headers: authHeaders() });
       if (!res.ok) throw new Error("Failed to load inventory.");
       const data = await res.json();
@@ -314,9 +294,22 @@ export const useStorePage = () => {
     }
   };
 
+  const fetchClients = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/clients`, { headers: authHeaders() });
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error(data.message || "Failed to load clients.");
+      setClients((Array.isArray(data) ? data : []).map((c) => ({ ...c, id: c._id ?? c.id })));
+    } catch (err) {
+      // The Store still works without it; the Client dropdown is just empty.
+      console.warn("[store] could not load clients:", err.message);
+    }
+  };
+
   useEffect(() => {
     fetchItems();
     fetchOwed();
+    fetchClients();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -358,26 +351,20 @@ export const useStorePage = () => {
 
     setSubmitting(true);
     try {
-      let data;
-      if (USE_MOCK) {
-        await mockDelay();
-        data = { _id: `p${Date.now()}`, serialNumber, partNumber, machinePart, machine, quantity: qtyNum, updatedAt: new Date().toISOString() };
-        mockItems = [data, ...mockItems];
-      } else {
-        const res = await fetch(`${API_BASE}/store`, {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({
-            serialNumber,
-            partNumber,
-            machinePart,
-            machine,
-            quantity: qtyNum,
-          }),
-        });
-        data = await res.json();
-        if (!res.ok) throw new Error(data.message || "Failed to add part.");
-      }
+      const res = await fetch(`${API_BASE}/store`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({
+          serialNumber,
+          partNumber,
+          machinePart,
+          machine,
+          quantity: qtyNum,
+          clientId: form.clientId || undefined,
+        }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error(data.message || "Failed to add part.");
 
       setItems((prev) => [data, ...prev]);
       notifyStoreChanged();
@@ -388,6 +375,7 @@ export const useStorePage = () => {
         machinePart: "",
         machine: MACHINE_TYPES[activeTab] ?? MACHINE_TYPES[0],
         quantity: "",
+        clientId: "",
       });
       setFormOpen(false);
       setSuccessMsg("Part added to inventory.");
@@ -425,20 +413,13 @@ export const useStorePage = () => {
     );
 
     try {
-      let data;
-      if (USE_MOCK) {
-        const cur = mockItems.find((i) => i._id === id);
-        data = { ...cur, quantity: Math.max(0, cur.quantity + delta), updatedAt: new Date().toISOString() };
-        mockItems = mockItems.map((i) => (i._id === id ? data : i));
-      } else {
-        const res = await fetch(`${API_BASE}/store/${id}/quantity`, {
-          method: "PATCH",
-          headers: authHeaders(),
-          body: JSON.stringify({ delta }),
-        });
-        data = await res.json();
-        if (!res.ok) throw new Error(data.message || "Failed to update quantity.");
-      }
+      const res = await fetch(`${API_BASE}/store/${id}/quantity`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ delta }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error(data.message || "Failed to update quantity.");
       setItems((prev) => prev.map((item) => (item._id === id ? data : item)));
       notifyStoreChanged();
       // Stock went UP for a part we owe clients → ask if it's the replacement
@@ -466,16 +447,12 @@ export const useStorePage = () => {
     });
     confirmDialogAction.current = async () => {
       try {
-        if (USE_MOCK) {
-          mockItems = mockItems.filter((i) => i._id !== id);
-        } else {
-          const res = await fetch(`${API_BASE}/store/${id}`, {
-            method: "DELETE",
-            headers: authHeaders(),
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.message || "Failed to delete part.");
-        }
+        const res = await fetch(`${API_BASE}/store/${id}`, {
+          method: "DELETE",
+          headers: authHeaders(),
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data.message || "Failed to delete part.");
         setItems((prev) => prev.filter((item) => item._id !== id));
         notifyStoreChanged();
         setSuccessMsg("Part deleted.");
@@ -598,7 +575,8 @@ export const useStorePage = () => {
         item.machinePart.toLowerCase().includes(q) ||
         item.partNumber.toLowerCase().includes(q) ||
         item.serialNumber.toLowerCase().includes(q) ||
-        item.machine.toLowerCase().includes(q);
+        item.machine.toLowerCase().includes(q) ||
+        (item.client?.companyName ?? "").toLowerCase().includes(q);
       const matchesLowStock = !lowStockOnly || item.quantity <= LOW_STOCK_THRESHOLD;
       const matchesOwed = !owedOnly || (owedMap.get(partKey(item.partNumber))?.total ?? 0) > 0;
       return matchesMachine && matchesSearch && matchesLowStock && matchesOwed;
@@ -615,6 +593,7 @@ export const useStorePage = () => {
         return {
           ...item,
           id: item._id,
+          clientName: item.client?.companyName ?? "", // "" = general stock
           updatedAtDisplay: formatDate(item.updatedAt),
           owedQty,                          // units we owe clients for this part
           owedEntries: group?.entries ?? [], // who we owe, for the tooltip / dialog
@@ -677,6 +656,7 @@ export const useStorePage = () => {
       const { rows: parsed, missingColumns } = await parseStoreFile(file, MACHINE_TYPES, items, {
         // On a machine tab, a file with no Machine column imports into that machine.
         defaultMachine: currentMachineType || "",
+        clientNames: clients.map((c) => c.companyName),
       });
       setImportState({ open: true, fileName: file.name, rows: parsed, missingColumns, error: "" });
     } catch (err) {
@@ -705,6 +685,7 @@ export const useStorePage = () => {
         machinePart: data.machinePart,
         machine: data.machine,
         quantity: data.quantity,
+        client: data.client || undefined,
       }));
     if (entries.length === 0) return;
 
@@ -715,25 +696,14 @@ export const useStorePage = () => {
       for (let i = 0; i < entries.length; i += IMPORT_CHUNK) {
         const chunk = entries.slice(i, i + IMPORT_CHUNK);
 
-        if (USE_MOCK) {
-          await mockDelay(300);
-          const made = chunk.map((e, j) => ({
-            _id: `p${Date.now()}_${i + j}`,
-            ...e,
-            updatedAt: new Date().toISOString(),
-          }));
-          mockItems = [...made, ...mockItems];
-          created.push(...made);
-        } else {
-          const res = await fetch(`${API_BASE}/store/bulk`, {
-            method: "POST",
-            headers: authHeaders(),
-            body: JSON.stringify({ items: chunk }),
-          });
-          const data = await safeJson(res);
-          if (!res.ok) throw new Error(data.message || "Bulk import failed.");
-          created.push(...(data.created || []));
-        }
+        const res = await fetch(`${API_BASE}/store/bulk`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ items: chunk }),
+        });
+        const data = await safeJson(res);
+        if (!res.ok) throw new Error(data.message || "Bulk import failed.");
+        created.push(...(data.created || []));
         setImportProgress(Math.round(((i + chunk.length) / entries.length) * 100));
       }
       setItems((prev) => [...created, ...prev]);
@@ -777,6 +747,7 @@ export const useStorePage = () => {
   // ---- public API returned to the UI component --------------------------------
   return {
     // data
+    clients,
     rows,
     filtered,
     summary,
@@ -818,7 +789,6 @@ export const useStorePage = () => {
     closeSettle,
     changeSettleQty,
     confirmSettle,
-    isMock: USE_MOCK,
 
     // low stock filter
     lowStockOnly,

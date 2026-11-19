@@ -10,9 +10,23 @@ const authHeaders = () => ({
   Authorization: `Bearer ${getToken()}`,
 });
 
+// For multipart requests: do NOT set Content-Type, the browser adds the
+// multipart boundary itself.
+const authOnlyHeaders = () => ({ Authorization: `Bearer ${getToken()}` });
+
 /* =========================================================================
    CONFIG
    ========================================================================= */
+
+// Must match the limits in routes/report.js (multer)
+export const MAX_FILES = 20;
+export const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+
+export const formatFileSize = (bytes = 0) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 // Real logged-in user/role, read from localStorage (set by useLogin.js on
 // successful login).
@@ -136,6 +150,7 @@ export const useReportsPage = () => {
   const [form, setForm] = useState({ reportDetails: "", lineNumber: "", clientId: "" });
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [files, setFiles] = useState([]); // File objects chosen for the new report
 
   // ---- toast helpers -------------------------------------------------------
   const showToast = (message, severity = "success") =>
@@ -214,7 +229,60 @@ export const useReportsPage = () => {
 
   const resetForm = () => {
     setForm({ reportDetails: "", lineNumber: "", clientId: "" });
+    setFiles([]);
     setFormError("");
+  };
+
+  // ---- attachment handlers -------------------------------------------------
+  const handleAddFiles = (fileList) => {
+    const incoming = Array.from(fileList || []);
+    if (incoming.length === 0) return;
+    setFormError("");
+
+    const tooBig = incoming.filter((f) => f.size > MAX_FILE_SIZE);
+    if (tooBig.length) {
+      setFormError(`${tooBig.map((f) => f.name).join(", ")} exceeds the ${MAX_FILE_SIZE / (1024 * 1024)} MB limit.`);
+    }
+    const ok = incoming.filter((f) => f.size <= MAX_FILE_SIZE);
+
+    setFiles((prev) => {
+      // skip exact duplicates (same name + size + last modified)
+      const fresh = ok.filter(
+        (f) => !prev.some((p) => p.name === f.name && p.size === f.size && p.lastModified === f.lastModified)
+      );
+      const next = [...prev, ...fresh];
+      if (next.length > MAX_FILES) {
+        setFormError(`You can attach up to ${MAX_FILES} files.`);
+        return next.slice(0, MAX_FILES);
+      }
+      return next;
+    });
+  };
+
+  const handleRemoveFile = (index) =>
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+
+  // Downloads need the auth header, so fetch as a blob instead of a plain link.
+  const handleDownloadAttachment = async (reportId, attachment) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/reports/${reportId}/files/${encodeURIComponent(attachment.storedName)}`,
+        { headers: authOnlyHeaders() }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "Failed to download file.");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = attachment.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast(err.message, "error");
+    }
   };
 
   const handleCancelForm = () => {
@@ -238,14 +306,17 @@ export const useReportsPage = () => {
 
     setSubmitting(true);
     try {
+      // multipart/form-data so files can travel with the report
+      const body = new FormData();
+      body.append("reportDetails", reportDetails);
+      body.append("lineNumber", Number(lineNumber));
+      body.append("clientId", clientId);
+      files.forEach((f) => body.append("files", f));
+
       const res = await fetch(`${API_BASE}/reports`, {
         method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({
-          reportDetails,
-          lineNumber: Number(lineNumber),
-          clientId,
-        }),
+        headers: authOnlyHeaders(),
+        body,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to submit report.");
@@ -419,6 +490,12 @@ export const useReportsPage = () => {
     handleChange,
     handleSubmit,
     handleCancelForm,
+
+    // attachments
+    files,
+    handleAddFiles,
+    handleRemoveFile,
+    handleDownloadAttachment,
 
     // status actions
     handleApprove,

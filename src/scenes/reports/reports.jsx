@@ -34,12 +34,15 @@ import DoNotDisturbOutlinedIcon from "@mui/icons-material/DoNotDisturbOutlined";
 import DeleteOutlineOutlinedIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import AttachFileOutlinedIcon from "@mui/icons-material/AttachFileOutlined";
 import Header from "../../components/Header";
 import {
   STATUS_TABS,
   statusStyles,
   getStatusIcon,
   getTabColor,
+  formatFileSize,
+  MAX_FILES,
   useReportsPage,
 } from "./reports.logic";
 import { useDateFormat } from "../settings/dateFormat.logic";
@@ -101,6 +104,10 @@ const ReportsPage = () => {
     handleChange,
     handleSubmit,
     handleCancelForm,
+    files,
+    handleAddFiles,
+    handleRemoveFile,
+    handleDownloadAttachment,
     handleApprove,
     handleDelete,
     handleExport,
@@ -188,6 +195,43 @@ const ReportsPage = () => {
               type="number" value={form.lineNumber} onChange={handleChange} fullWidth
               error={!!formError && !form.lineNumber}
             />
+            {/* attachments — pick or drag files, shown as removable chips */}
+            <Box sx={{ gridColumn: "span 2" }}>
+              <Box
+                component="label"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); handleAddFiles(e.dataTransfer.files); }}
+                sx={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
+                  p: "14px", cursor: "pointer", borderRadius: "6px",
+                  border: `2px dashed ${colors.grey[600]}`,
+                  "&:hover": { borderColor: colors.greenAccent[400] },
+                }}
+              >
+                <AttachFileOutlinedIcon sx={{ fontSize: 20, color: colors.greenAccent[400] }} />
+                <Typography color={colors.grey[300]} fontSize="13px">
+                  Attach files (click or drag here) — up to {MAX_FILES} files, 100 MB each
+                </Typography>
+                <input
+                  type="file" hidden multiple
+                  onChange={(e) => { handleAddFiles(e.target.files); e.target.value = ""; }}
+                />
+              </Box>
+              {files.length > 0 && (
+                <Box display="flex" flexWrap="wrap" gap="8px" mt="10px">
+                  {files.map((f, i) => (
+                    <Chip
+                      key={`${f.name}-${f.size}-${f.lastModified}`}
+                      icon={<AttachFileOutlinedIcon />}
+                      label={`${f.name} (${formatFileSize(f.size)})`}
+                      size="small"
+                      onDelete={() => handleRemoveFile(i)}
+                      sx={{ backgroundColor: colors.primary[300], color: colors.grey[100], maxWidth: "100%" }}
+                    />
+                  ))}
+                </Box>
+              )}
+            </Box>
             {formError && (
               <Box sx={{ gridColumn: "span 2" }}>
                 <Alert severity="error" sx={{ fontSize: "12px", py: "2px" }}>{formError}</Alert>
@@ -363,6 +407,23 @@ const ReportsPage = () => {
                   <Typography color={colors.grey[200]} fontSize="13px" lineHeight={1.7} mb="12px">
                     {report.reportDetails}
                   </Typography>
+
+                  {/* attachments — click a chip to download */}
+                  {report.attachments?.length > 0 && (
+                    <Box display="flex" flexWrap="wrap" gap="8px" mb="12px">
+                      {report.attachments.map((a) => (
+                        <Tooltip key={a.storedName} title="Download">
+                          <Chip
+                            icon={<AttachFileOutlinedIcon />}
+                            label={`${a.name} (${formatFileSize(a.size)})`}
+                            size="small"
+                            onClick={() => handleDownloadAttachment(report.id, a)}
+                            sx={{ backgroundColor: colors.primary[300], color: colors.grey[100], cursor: "pointer", maxWidth: "100%" }}
+                          />
+                        </Tooltip>
+                      ))}
+                    </Box>
+                  )}
 
                   {/* rejection reason */}
                   {report.status === "rejected" && report.rejectionReason && (

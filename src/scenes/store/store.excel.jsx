@@ -19,6 +19,8 @@ const HEADER_ALIASES = {
   machinePart:  ["description", "machinepart", "partdescription", "partname", "item", "items", "product", "goods"],
   machine:      ["machine", "machinetype", "type", "machinemodel"],
   quantity:     ["quantity", "qty", "units", "stock", "onhand", "qtyinstock", "amount"],
+  // OPTIONAL: the client that owns the part. Must match an existing client name.
+  client:       ["client", "clientname", "company", "companyname", "customer", "owner", "clientoptional"],
 };
 
 // Columns that must exist. (Machine becomes optional when the caller passes a
@@ -31,6 +33,7 @@ export const FIELD_LABELS = {
   machinePart: "Description",
   machine: "Machine",
   quantity: "Quantity",
+  client: "Client",
 };
 
 const norm = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -51,7 +54,7 @@ const parseQuantity = (value) => {
 // Returns { rows: [{ rowNum, data, errors, duplicate }], missingColumns: [] }
 // Throws an Error with a user-friendly message for unreadable files.
 export const parseStoreFile = async (file, machineTypes, existing = [], opts = {}) => {
-  const { defaultMachine = "" } = opts;
+  const { defaultMachine = "", clientNames = [] } = opts;
   const ext = "." + (file.name.split(".").pop() || "").toLowerCase();
   if (!ACCEPTED_EXT.includes(ext)) {
     throw new Error("Unsupported file type. Please upload an .xlsx, .xls or .csv file.");
@@ -114,6 +117,7 @@ export const parseStoreFile = async (file, machineTypes, existing = [], opts = {
   }
 
   const machineByName = new Map(machineTypes.map((m) => [norm(m), m]));
+  const clientByName = new Map(clientNames.map((n) => [norm(n), n]));
   const keyOf = (serial, part, machine) => [norm(serial), norm(part), norm(machine)].join("|");
   const existingKeys = new Set(existing.map((r) => keyOf(r.serialNumber, r.partNumber, r.machine)));
   const seenInFile = new Set();
@@ -130,10 +134,15 @@ export const parseStoreFile = async (file, machineTypes, existing = [], opts = {
     const machineRaw = colIdx.machine === undefined ? defaultMachine : text(get("machine"));
     const machine = machineByName.get(norm(machineRaw));
 
+    // Client is optional. When given, it must be an existing client.
+    const clientRaw = text(get("client"));
+    const client = clientRaw ? clientByName.get(norm(clientRaw)) : "";
+
     if (!serialNumber) errors.push("Serial Number is empty");
     if (!partNumber) errors.push("Part Number is empty");
     if (!machinePart) errors.push("Description is empty");
     if (quantity === null) errors.push("Quantity must be a number that is 0 or greater");
+    if (clientRaw && !client) errors.push(`Client "${clientRaw}" not found`);
     if (!machineRaw) errors.push("Machine is empty");
     else if (!machine) errors.push(`Machine "${machineRaw}" not recognised (use: ${machineTypes.join(", ")})`);
 
@@ -146,7 +155,7 @@ export const parseStoreFile = async (file, machineTypes, existing = [], opts = {
 
     return {
       rowNum: headerIdx + 2 + i, // spreadsheet row number as the user sees it
-      data: { serialNumber, partNumber, machinePart, machine: machine ?? machineRaw, quantity },
+      data: { serialNumber, partNumber, machinePart, machine: machine ?? machineRaw, quantity, client: client ?? clientRaw },
       errors,
       duplicate,
     };
@@ -159,15 +168,16 @@ export const parseStoreFile = async (file, machineTypes, existing = [], opts = {
 export const downloadStoreTemplate = async (machineTypes) => {
   const XLSX = await import("xlsx");
   const ws = XLSX.utils.aoa_to_sheet([
-    ["Serial Number", "Part Number", "Description", "Machine", "Quantity"],
-    ["SN-1001", "PR-1001", "Printer ribbon", machineTypes[0] ?? "Macsa ID", 12],
+    ["Serial Number", "Part Number", "Description", "Machine", "Quantity", "Client"],
+    ["SN-1001", "PR-1001", "Printer ribbon", machineTypes[0] ?? "Macsa ID", 12, ""],
   ]);
-  ws["!cols"] = [{ wch: 18 }, { wch: 16 }, { wch: 32 }, { wch: 16 }, { wch: 10 }];
+  ws["!cols"] = [{ wch: 18 }, { wch: 16 }, { wch: 32 }, { wch: 16 }, { wch: 10 }, { wch: 30 }];
 
   const help = XLSX.utils.aoa_to_sheet([
     ["How to fill in the Store sheet"],
     ["Required: Serial Number, Part Number, Description, Machine, Quantity."],
     ["Machine must be one of the names on the 'Machines' sheet.  Quantity must be 0 or more."],
+    ["Client is optional: leave it blank for general stock, or type an existing client name exactly."],
     ["Rows whose Serial Number + Part Number + Machine already exist in the Store are flagged as possible duplicates."],
     ["Only the first sheet is imported. Maximum 5,000 rows per file."],
   ]);

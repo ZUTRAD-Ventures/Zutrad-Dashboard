@@ -115,6 +115,17 @@ const buildColumns = ({
   },
   { field: "partNumber", headerName: "Part Number", flex: 1 },
   { field: "machinePart", headerName: "Description", flex: 1.5 },
+  {
+    field: "clientName",
+    headerName: "Client",
+    flex: 1.2,
+    renderCell: ({ value }) =>
+      value ? (
+        value
+      ) : (
+        <span style={{ color: colors.grey[500], fontStyle: "italic" }}>General stock</span>
+      ),
+  },
   ...(isAllTab
     ? [{ field: "machine", headerName: "Machine", flex: 1 }]
     : []),
@@ -272,7 +283,6 @@ const StorePage = () => {
     closeSettle,
     changeSettleQty,
     confirmSettle,
-    isMock,
     handleExport,
     importState,
     importParsing,
@@ -295,6 +305,7 @@ const StorePage = () => {
     canAddPart,
     canDelete,
     canExport,
+    clients,
   } = useStorePage();
 
   const columns = buildColumns({
@@ -363,12 +374,6 @@ const StorePage = () => {
           </Tooltip>
         </Box>
       </Box>
-
-      {isMock && (
-        <Alert severity="warning" sx={{ mb: "16px", mt: "8px", fontSize: "12px" }}>
-          Preview mode: parts and owed stock are stored in memory only (see store.preview.jsx). The /store and /supply backends are not connected.
-        </Alert>
-      )}
 
       {successMsg && (
         <Alert severity="success" sx={{ mb: "16px", mt: "8px" }}>
@@ -519,7 +524,27 @@ const StorePage = () => {
                 <MenuItem key={t} value={t}>{t}</MenuItem>
               ))}
             </TextField>
-            <Box display="flex" alignItems="center" justifyContent="flex-end">
+            <TextField
+              select
+              variant="filled"
+              label="Client (optional)"
+              name="clientId"
+              value={form.clientId}
+              onChange={handleFormChange}
+              fullWidth
+            >
+              <MenuItem value="">— General stock (no client) —</MenuItem>
+              {clients.map((c) => (
+                <MenuItem key={c.id} value={c.id}>{c.companyName}</MenuItem>
+              ))}
+            </TextField>
+            {/* spans all 3 columns so flex-end pins the button to the form's right edge */}
+            <Box
+              display="flex"
+              alignItems="center"
+              justifyContent="flex-end"
+              sx={{ gridColumn: "1 / -1" }}
+            >
               <Button variant="contained" color="secondary" onClick={handleAdd} sx={{ height: "48px", px: "24px" }}>
                 Add Part
               </Button>
@@ -657,6 +682,7 @@ const StorePage = () => {
                 Upload an <b>.xlsx</b>, <b>.xls</b> or <b>.csv</b> file. The first row must be a header with these
                 columns (any order): <b>Serial Number, Part Number, Description, Machine, Quantity</b>.
                 Machine must be one of: {MACHINE_TYPES.join(", ")}. Quantity must be 0 or more.
+                An optional <b>Client</b> column marks which client owns the part; it must match an existing client name.
                 {!isAllTab && ` If the file has no Machine column, every row is added to ${currentMachineType}.`}
               </Typography>
 
@@ -763,7 +789,7 @@ const StorePage = () => {
                 <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
-                      {["Row", "Serial No.", "Part No.", "Description", "Machine", "Qty", "Status"].map((h) => (
+                      {["Row", "Serial No.", "Part No.", "Description", "Machine", "Client", "Qty", "Status"].map((h) => (
                         <TableCell key={h} sx={{ backgroundColor: colors.blueAccent[700], color: colors.grey[100], fontSize: "11px", fontWeight: 700 }}>
                           {h}
                         </TableCell>
@@ -781,6 +807,7 @@ const StorePage = () => {
                           <TableCell sx={cell}>{r.data.partNumber || "—"}</TableCell>
                           <TableCell sx={cell}>{r.data.machinePart || "—"}</TableCell>
                           <TableCell sx={cell}>{r.data.machine || "—"}</TableCell>
+                          <TableCell sx={cell}>{r.data.client || "—"}</TableCell>
                           <TableCell sx={cell}>{r.data.quantity ?? "—"}</TableCell>
                           <TableCell sx={{ ...cell, color: bad ? colors.redAccent[300] : r.duplicate ? colors.grey[300] : colors.greenAccent[300] }}>
                             {bad ? r.errors.join("; ") : r.duplicate ? "Possible duplicate" : "OK"}

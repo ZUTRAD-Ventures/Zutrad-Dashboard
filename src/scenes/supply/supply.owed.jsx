@@ -6,20 +6,14 @@
 //   repayOwed(...)   → POST /supply/owed/repay      (stock was replaced)
 //   owedByPart(list) → Map keyed by normalised part number (for the Store page)
 //
-// In preview mode (REACT_APP_SUPPLY_MOCK=true) everything runs against an
-// in-memory ledger instead of the backend. The REAL backend contract for these
-// endpoints and the ledger collection is written up in the BACKEND GUIDE at the
-// top of supply.logic.jsx (and the Store side in store.logic.jsx).
+// The backend contract for these endpoints and the ledger collection is written
+// up in the BACKEND GUIDE at the top of supply.logic.jsx (and the Store side in
+// store.logic.jsx). Backend: routes/supply.js, models/SupplyLedger.js.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { mockDataClients } from "../../data/mockData";
 import { hasPermission, isAdminOrSuper } from "../../utils/auth";
-import { isSupplyPreview } from "./supply.preview";
-import { isStorePreview } from "../store/store.preview";
 
 export const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
-// Either preview flag mocks the shared ledger, so Supply and Store always agree.
-export const USE_MOCK = isSupplyPreview || isStorePreview;
 
 // Moving stock from one client's holding to another client creates an "owed"
 // record for the client it was taken from. true = only administrators and
@@ -47,65 +41,10 @@ const safeJson = async (res) => {
   }
 };
 
-// ── mock ledger (preview only) ───────────────────────────────────────────────
-// Mirrors the backend "supplyLedger" collection. APPEND-ONLY: corrections are
-// new rows, never edits.
-export const mockMe = { _id: "local-superadmin", firstName: "Local", surname: "Superadmin" };
-export const mockDelay = (ms = 250) => new Promise((r) => setTimeout(r, ms));
-
-export const mockClientRef = (id) => {
-  const c = mockDataClients.find((x) => String(x.id) === String(id)) || mockDataClients[0];
-  return { id: c?.id, _id: c?.id, companyName: c?.companyName };
-};
-
-let mockLedger = [];
-
-export const mockAddLedger = (entry) => {
-  mockLedger = [
-    ...mockLedger,
-    { _id: `l${Date.now()}_${mockLedger.length}`, createdAt: new Date().toISOString(), createdBy: mockMe, ...entry },
-  ];
-};
-
-// Same aggregation as GET /supply/owed on the real backend
-export const mockOwedList = () => {
-  const groups = new Map();
-  mockLedger.forEach((e) => {
-    const k = `${e.clientId}|${partKey(e.partNumber)}`;
-    const g = groups.get(k) || { clientId: e.clientId, partNumber: partKey(e.partNumber), goodsSupplied: e.goodsSupplied, total: 0, lastTakenAt: null };
-    g.total += e.qtyChange;
-    g.goodsSupplied = e.goodsSupplied || g.goodsSupplied;
-    if (e.type === "borrowed_out" && (!g.lastTakenAt || e.createdAt > g.lastTakenAt)) g.lastTakenAt = e.createdAt;
-    groups.set(k, g);
-  });
-  return [...groups.values()]
-    .filter((g) => g.total < 0)
-    .map((g) => ({
-      client: mockClientRef(g.clientId),
-      partNumber: g.partNumber,
-      goodsSupplied: g.goodsSupplied,
-      owed: -g.total,
-      lastTakenAt: g.lastTakenAt,
-    }));
-};
-
-// Reverse the ledger effect of deleted supply entries (guide step 6)
-export const mockReverseTransfers = (supplyIds) => {
-  mockLedger
-    .filter((e) => supplyIds.includes(e.relatedSupply) && e.type === "borrowed_out")
-    .forEach((e) =>
-      mockAddLedger({
-        clientId: e.clientId, partNumber: e.partNumber, goodsSupplied: e.goodsSupplied,
-        qtyChange: -e.qtyChange, type: "reversed", relatedSupply: e.relatedSupply, note: "Supply entry deleted",
-      })
-    );
-};
-
 // ── API ──────────────────────────────────────────────────────────────────────
 
 // → [{ client, partNumber, goodsSupplied, owed, lastTakenAt }]. Throws on error.
 export const fetchOwedList = async () => {
-  if (USE_MOCK) return mockOwedList();
   const res = await fetch(`${API_BASE}/supply/owed`, { headers: authBearer() });
   const data = await safeJson(res);
   if (!res.ok) throw new Error(data.message || "Failed to load owed stock.");
@@ -114,11 +53,6 @@ export const fetchOwedList = async () => {
 
 // Record that `quantity` units were replaced for a client. Throws on error.
 export const repayOwed = async ({ clientId, partNumber, goodsSupplied, quantity, note }) => {
-  if (USE_MOCK) {
-    await mockDelay();
-    mockAddLedger({ clientId, partNumber, goodsSupplied, qtyChange: quantity, type: "settled", note });
-    return;
-  }
   const res = await fetch(`${API_BASE}/supply/owed/repay`, {
     method: "POST",
     headers: authJson(),
@@ -146,4 +80,4 @@ export const owedByPart = (list) => {
     map.set(k, g);
   });
   return map;
-};
+};

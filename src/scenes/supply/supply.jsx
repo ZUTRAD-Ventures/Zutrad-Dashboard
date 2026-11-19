@@ -14,7 +14,6 @@ import {
   GridToolbarDensitySelector,
 } from "@mui/x-data-grid";
 import { tokens } from "../../theme";
-import { mockDataClients } from "../../data/mockData";
 
 // ── icons ─────────────────────────────────────────────────────────────────────
 import KeyboardArrowDownIcon      from "@mui/icons-material/KeyboardArrowDown";
@@ -80,10 +79,10 @@ const SupplyPage = () => {
     toast, closeToast,
     errorDialog, closeErrorDialog,
     canLogSupply, canDelete, canExport, canDownload,
-    isMock,
     owed, totalOwed, owedOpen, setOwedOpen,
     repayDialog, repaying, openRepay, closeRepay, changeRepay, confirmRepay,
     canTransfer,
+    clients,
   } = useSupply();
 
   const { formatDate } = useDateFormat();
@@ -270,11 +269,7 @@ const SupplyPage = () => {
     <Box m="20px">
       <Header title="SUPPLY" subtitle="Goods Supplied to Clients" />
 
-      {isMock && (
-        <Alert severity="warning" sx={{ mb: "16px", fontSize: "12px" }}>
-          Preview mode: data is stored in memory only (see supply.preview.jsx). The /supply backend is not connected.
-        </Alert>
-      )}
+      
 
       {/* ── stats bar ──────────────────────────────────────────────────────── */}
       <Stack direction="row" spacing={2} mt="24px" flexWrap="wrap" gap="12px">
@@ -351,6 +346,11 @@ const SupplyPage = () => {
               error={!!formError && !form.goodsSupplied}
             />
             <TextField
+              variant="filled" label="Serial Number" name="serialNumber"
+              value={form.serialNumber} onChange={handleChange} fullWidth
+              error={!!formError && !form.serialNumber}
+            />
+            <TextField
               variant="filled" label="Part Number" name="partNumber"
               value={form.partNumber} onChange={handleChange} fullWidth
               error={!!formError && !form.partNumber}
@@ -371,7 +371,7 @@ const SupplyPage = () => {
               value={form.clientId} onChange={handleChange}
               fullWidth error={!!formError && !form.clientId}
             >
-              {mockDataClients.map((c) => (
+              {clients.map((c) => (
                 <MenuItem key={c.id} value={c.id}>{c.companyName}</MenuItem>
               ))}
             </TextField>
@@ -438,7 +438,7 @@ const SupplyPage = () => {
               }
             >
               <MenuItem value="">— None (own / general stock) —</MenuItem>
-              {mockDataClients
+              {clients
                 .filter((c) => String(c.id) !== String(form.clientId))
                 .map((c) => (
                   <MenuItem key={c.id} value={c.id}>{c.companyName}</MenuItem>
@@ -611,7 +611,7 @@ const SupplyPage = () => {
             }}
           >
             <MenuItem value="all">All Clients</MenuItem>
-            {mockDataClients.map((c) => (
+            {clients.map((c) => (
               <MenuItem key={c.id} value={String(c.id)}>{c.companyName}</MenuItem>
             ))}
           </TextField>
@@ -897,4 +897,4 @@ const SupplyPage = () => {
   );
 };
 
-export default SupplyPage;
+export default SupplyPage;

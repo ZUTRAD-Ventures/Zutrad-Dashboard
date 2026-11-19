@@ -4,7 +4,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useMemo, useEffect, useRef } from "react";
-import { mockDataClients } from "../../data/mockData";
 import { hasPermission, isAdminOrSuper, isSuperAdmin } from "../../utils/auth";
 import { notifySupplyChanged } from "../../utils/eventbus";
 import PictureAsPdfOutlinedIcon from "@mui/icons-material/PictureAsPdfOutlined";
@@ -12,8 +11,7 @@ import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import TableChartOutlinedIcon from "@mui/icons-material/TableChartOutlined";
 import InsertDriveFileOutlinedIcon from "@mui/icons-material/InsertDriveFileOutlined";
 import {
-  API_BASE, USE_MOCK, canRecordTransfers,
-  mockMe, mockDelay, mockClientRef, mockAddLedger, mockReverseTransfers,
+  API_BASE, canRecordTransfers,
   fetchOwedList, repayOwed,
 } from "./supply.owed";
 
@@ -133,20 +131,6 @@ import {
 //   Only the owed figure is a claim, and it comes from this ledger.
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ── mock store (preview only) ─────────────────────────────────────────────────
-const daysAgoISO = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
-let mockRows = [
-  { _id: "m1", goodsSupplied: "Printer ribbon", partNumber: "PR-1001", quantity: 12, supplyDate: daysAgoISO(3),  client: mockClientRef(mockDataClients[0]?.id), user: mockMe, attachments: [] },
-  { _id: "m2", goodsSupplied: "Ink cartridge",  partNumber: "IC-2040", quantity: 30, supplyDate: daysAgoISO(9),  client: mockClientRef(mockDataClients[1]?.id ?? mockDataClients[0]?.id), user: mockMe, attachments: [] },
-  { _id: "m3", goodsSupplied: "Cleaning fluid", partNumber: "CF-77",   quantity: 6,  supplyDate: daysAgoISO(20), client: mockClientRef(mockDataClients[0]?.id), user: mockMe, attachments: [],
-    takenFrom: mockClientRef(mockDataClients[1]?.id ?? mockDataClients[0]?.id), transferNote: "Urgent job — replace when next order lands" },
-];
-// Seed one transfer so the "Owed to Clients" panel has something to show
-mockAddLedger({
-  clientId: mockDataClients[1]?.id ?? mockDataClients[0]?.id, partNumber: "CF-77", goodsSupplied: "Cleaning fluid",
-  qtyChange: -6, type: "borrowed_out", relatedSupply: "m3", note: "Urgent job — replace when next order lands",
-});
-
 // ── auth headers ──────────────────────────────────────────────────────────────
 // IMPORTANT: never include Content-Type when sending FormData — the browser
 // must set the multipart boundary itself or multer will reject the request.
@@ -181,12 +165,13 @@ const safeJson = async (res) => {
 
 export const exportCSV = (rows) => {
   const headers = [
-    "ID", "Goods Supplied", "Part Number", "Qty",
+    "ID", "Goods Supplied", "Serial Number", "Part Number", "Qty",
     "Client", "Supply Date", "Taken From", "Transfer Note", "Logged By", "Attachments",
   ];
   const data = rows.map((r) => [
     r.id ?? r._id,
     r.goodsSupplied,
+    r.serialNumber ?? "",
     r.partNumber,
     r.quantity,
     r.client?.companyName ?? "",
@@ -238,6 +223,7 @@ export const fileIcon = (filename) => {
 
 const EMPTY_FORM = {
   goodsSupplied: "",
+  serialNumber: "", // must match a part in the Store; stock is deducted from it
   partNumber: "",
   quantity: "",
   supplyDate: "",
@@ -260,6 +246,7 @@ export const useSupply = () => {
 
   // ── core data ───────────────────────────────────────────────────────────────
   const [rows,        setRows]        = useState([]);
+  const [clients,     setClients]     = useState([]); // real clients from GET /clients
   const [loading,     setLoading]     = useState(true);
   const [loadError,   setLoadError]   = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
@@ -334,10 +321,6 @@ export const useSupply = () => {
     }
 
     try {
-      if (USE_MOCK) {
-        showErrorDialog("Preview mode", "Attachment downloads need the real backend.");
-        return;
-      }
       const res = await fetch(
         `${API_BASE}/supply/files/${encodeURIComponent(storedName)}`,
         { headers: authBearer() }
@@ -384,11 +367,6 @@ export const useSupply = () => {
     setLoading(true);
     setLoadError("");
     try {
-      if (USE_MOCK) {
-        await mockDelay();
-        setRows(mockRows);
-        return;
-      }
       const res  = await fetch(`${API_BASE}/supply`, { headers: authBearer() });
       const data = await safeJson(res);
       if (!res.ok) throw new Error(data.message || "Failed to load supply log.");
@@ -398,6 +376,19 @@ export const useSupply = () => {
       showToast(err.message, "error");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Real client list for the dropdowns. `id` mirrors Mongo's `_id` so the rest
+  // of the page can keep reading `c.id`.
+  const fetchClients = async () => {
+    try {
+      const res  = await fetch(`${API_BASE}/clients`, { headers: authBearer() });
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error(data.message || "Failed to load clients.");
+      setClients((Array.isArray(data) ? data : []).map((c) => ({ ...c, id: c._id ?? c.id })));
+    } catch (err) {
+      showToast(err.message, "error");
     }
   };
 
@@ -413,6 +404,7 @@ export const useSupply = () => {
   useEffect(() => {
     fetchRows();
     fetchOwed();
+    fetchClients();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -429,6 +421,7 @@ export const useSupply = () => {
         !q ||
         r.goodsSupplied?.toLowerCase().includes(q) ||
         r.partNumber?.toLowerCase().includes(q) ||
+        r.serialNumber?.toLowerCase().includes(q) ||
         r.client?.companyName?.toLowerCase().includes(q) ||
         (r.user ? `${r.user.firstName} ${r.user.surname}` : "").toLowerCase().includes(q);
       const matchClient =
@@ -477,8 +470,9 @@ export const useSupply = () => {
       return;
     }
 
-    const { goodsSupplied, partNumber, quantity, supplyDate, clientId, takenFromClientId, transferNote } = form;
+    const { goodsSupplied, serialNumber, partNumber, quantity, supplyDate, clientId, takenFromClientId, transferNote } = form;
     if (!goodsSupplied.trim()) { setFormError("Goods Supplied is required."); return; }
+    if (!serialNumber.trim())  { setFormError("Serial Number is required.");  return; }
     if (!partNumber.trim())    { setFormError("Part Number is required.");    return; }
     if (!quantity || Number(quantity) <= 0) { setFormError("Enter a valid quantity."); return; }
     if (!supplyDate)           { setFormError("Supply Date is required.");    return; }
@@ -495,31 +489,9 @@ export const useSupply = () => {
 
     setSubmitting(true);
     try {
-      if (USE_MOCK) {
-        await mockDelay();
-        const row = {
-          _id: `m${Date.now()}`,
-          goodsSupplied, partNumber, quantity: Number(quantity), supplyDate,
-          client: mockClientRef(clientId), user: mockMe,
-          attachments: attachments.map((f) => ({ name: f.name })),
-          ...(takenFromClientId ? { takenFrom: mockClientRef(takenFromClientId), transferNote: transferNote.trim() } : {}),
-        };
-        mockRows = [row, ...mockRows];
-        if (takenFromClientId) {
-          mockAddLedger({
-            clientId: takenFromClientId, partNumber, goodsSupplied, qtyChange: -Number(quantity),
-            type: "borrowed_out", relatedSupply: row._id, note: transferNote.trim(),
-          });
-          fetchOwed();
-        }
-        setRows((prev) => [row, ...prev]);
-        resetForm();
-        setFormOpen(false);
-        showToast("Supply log added successfully.");
-        return;
-      }
       const fd = new FormData();
       fd.append("goodsSupplied", goodsSupplied);
+      fd.append("serialNumber",  serialNumber.trim());
       fd.append("partNumber",    partNumber);
       fd.append("quantity",      quantity);
       fd.append("supplyDate",    supplyDate);
@@ -576,14 +548,6 @@ export const useSupply = () => {
     });
     confirmDialogAction.current = async () => {
       try {
-        if (USE_MOCK) {
-          mockReverseTransfers([id]);
-          mockRows = mockRows.filter((r) => r._id !== id);
-          setRows((prev) => prev.filter((r) => r._id !== id));
-          fetchOwed();
-          showToast("Entry deleted.");
-          return;
-        }
         const res  = await fetch(`${API_BASE}/supply/${id}`, {
           method:  "DELETE",
           headers: authBearer(),
@@ -616,15 +580,6 @@ export const useSupply = () => {
     });
     confirmDialogAction.current = async () => {
       try {
-        if (USE_MOCK) {
-          mockReverseTransfers(selectedIds);
-          mockRows = mockRows.filter((r) => !selectedIds.includes(r._id));
-          setRows((prev) => prev.filter((r) => !selectedIds.includes(r._id)));
-          fetchOwed();
-          showToast(`${selectedIds.length} entries deleted.`);
-          setSelectedIds([]);
-          return;
-        }
         const res  = await fetch(`${API_BASE}/supply/bulk-delete`, {
           method:  "POST",
           headers: authJson(),
@@ -719,7 +674,7 @@ export const useSupply = () => {
     setSelectedIds,
     loading,
     loadError,
-    clients: mockDataClients,
+    clients,
 
     // stats
     totalQty,
@@ -785,7 +740,6 @@ export const useSupply = () => {
     canTransfer,
 
     // preview mode flag
-    isMock: USE_MOCK,
 
     // permissions
     canLogSupply,
@@ -793,4 +747,4 @@ export const useSupply = () => {
     canExport,
     canDownload,
   };
-};
+};

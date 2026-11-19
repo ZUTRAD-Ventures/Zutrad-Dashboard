@@ -38,6 +38,8 @@ import { useSessionTimeout } from "./utils/sessionTimeout";
 import { SETTINGS_UPDATED_EVENT } from "./scenes/settings/settings.logic";
 
 
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
+
 // ── JWT helpers ───────────────────────────────────────────────────────────────
 
 const decodeToken = (token) => {
@@ -115,6 +117,36 @@ function App() {
     setCurrentUser(null);
   }, []);
 
+  // ── confirm the saved login with the backend on startup ──────────────────
+  // A token saved in the browser is only checked for expiry locally, so a stale
+  // or leftover one (old preview session, wiped database, changed JWT_SECRET)
+  // would skip the login page. Ask the backend once; if it rejects the token,
+  // log out. A network error keeps the session so a brief outage doesn't sign
+  // anyone out.
+  const [checkingSession, setCheckingSession] = useState(() => !!getUserFromStorage());
+
+  useEffect(() => {
+    if (!checkingSession) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+        });
+        if (!cancelled && (res.status === 401 || res.status === 403 || res.status === 404)) {
+          handleLogout();
+        }
+      } catch {
+        /* backend unreachable: keep the session */
+      } finally {
+        if (!cancelled) setCheckingSession(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // run once on startup
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── keep currentUser.settings fresh ──────────────────────────────────────
   // The Settings page dispatches SETTINGS_UPDATED_EVENT after a successful
   // save (see useSettings.logic.js). Without this, App would only see the
@@ -134,6 +166,10 @@ function App() {
   // model and toSafeObject(), which includes it in both the /auth/login
   // response and the cached "user" localStorage object.
   useSessionTimeout(isAuthenticated ? currentUser?.settings?.sessionTimeout : null, handleLogout);
+
+  // Hold the screen for the moment it takes to confirm the saved login, so a
+  // rejected session never flashes the dashboard before the login page.
+  if (checkingSession) return null;
 
   // Any logged-in user.
   const protect = (element) => (
