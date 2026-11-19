@@ -1,20 +1,14 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { getToken, isAdminOrSuper } from "../../utils/auth";
-import { isSchedulePreview } from "./schedule.preview";
+import { parseScheduleFile, downloadScheduleTemplate } from "./schedule.excel";
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
 
 /* =========================================================================
    ██████  BACKEND INTEGRATION GUIDE — SCHEDULE PAGE  ██████
 
-   STATUS: FRONTEND IMPLEMENTED — BACKEND NOT IMPLEMENTED.
-   The backend source is not part of this codebase drop, so NONE of the
-   endpoints below exist yet. This file calls them exactly as documented, so
-   the page will show its error state ("Failed to load schedules") until the
-   backend is built. For UI-only previews there is an opt-in mock mode
-   (REACT_APP_SCHEDULE_MOCK=true with `npm start`, see schedule.preview.jsx). Mock
-   mode keeps data in memory only; it does NOT enforce permissions or the
-   21-day rule and must never be used in production.
+   STATUS: CONNECTED TO THE BACKEND (routes/schedule.js, models/Schedule.js).
+   This file calls the endpoints below exactly as documented.
 
    ─────────────────────────────────────────────────────────────────────────
    1. DATABASE — new collection/table: `schedules`
@@ -134,13 +128,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const STATUS_TABS = ["all", "pending", "overdue", "completed"];
 
+// Rows per request when bulk-importing (backend accepts up to 200 per call).
+const IMPORT_CHUNK = 200;
+
 const TITLE_MAX = 120;
 const DESCRIPTION_MAX = 1000;
 export { TITLE_MAX, DESCRIPTION_MAX };
-
-// DEV-ONLY preview switch. Off by default. When "true", no network calls are
-// made and data lives in memory (resets on refresh). NOT real functionality.
-const USE_MOCK = isSchedulePreview; // see schedule.preview.jsx (dev-server only)
 
 const authHeaders = () => ({
   "Content-Type": "application/json",
@@ -221,7 +214,7 @@ const sortSchedules = (list) =>
   });
 
 /* =========================================================================
-   API LAYER — real calls documented in the guide above, or in-memory mock.
+   API LAYER — real calls documented in the guide above.
    ========================================================================= */
 
 const apiFetch = async (path, options = {}) => {
@@ -235,49 +228,22 @@ const apiFetch = async (path, options = {}) => {
   return data;
 };
 
-// ── mock store (preview only) ───────────────────────────────────────────────
-const mockUsers = [
-  { _id: "u1", firstName: "Ada", surname: "Okafor", role: "engineer" },
-  { _id: "u2", firstName: "Tunde", surname: "Bello", role: "engineer" },
-  { _id: "u3", firstName: "Ngozi", surname: "Eze", role: "receptionist" },
-];
-const daysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
-const daysFromNow = (n) => new Date(Date.now() + n * DAY_MS).toISOString();
-let mockSchedules = [
-  { _id: "s1", title: "Service Line 4 compressor", description: "Check oil and belt tension.", assignedTo: mockUsers[0], dueDate: daysFromNow(3), status: "pending", createdBy: mockUsers[2], createdAt: daysAgo(2), completedAt: null, completedBy: null },
-  { _id: "s2", title: "Submit weekly site report", description: "", assignedTo: mockUsers[1], dueDate: daysAgo(2), status: "pending", createdBy: mockUsers[2], createdAt: daysAgo(9), completedAt: null, completedBy: null },
-  { _id: "s3", title: "Restock spare filters", description: "Count and log in Store.", assignedTo: mockUsers[1], dueDate: daysAgo(10), status: "completed", createdBy: mockUsers[2], createdAt: daysAgo(15), completedAt: daysAgo(18), completedBy: mockUsers[2] },
-  { _id: "s4", title: "Old completed task (hidden)", description: "", assignedTo: mockUsers[0], dueDate: daysAgo(40), status: "completed", createdBy: mockUsers[2], createdAt: daysAgo(45), completedAt: daysAgo(30), completedBy: mockUsers[2] },
-];
-const delay = (ms = 300) => new Promise((r) => setTimeout(r, ms));
-
 const api = {
-  async list() {
-    if (USE_MOCK) { await delay(); return mockSchedules; }
+  list() {
     return apiFetch("/schedules"); // GET /schedules — see guide §2
   },
-  async assignees() {
-    if (USE_MOCK) { await delay(100); return mockUsers; }
+  assignees() {
     return apiFetch("/auth/users"); // existing endpoint — see guide §2
   },
-  async create(payload, me) {
-    if (USE_MOCK) {
-      await delay();
-      const assignee = mockUsers.find((u) => u._id === payload.assignedTo) || mockUsers[0];
-      const row = { _id: `s${Date.now()}`, ...payload, assignedTo: assignee, status: "pending", createdBy: me, createdAt: new Date().toISOString(), completedAt: null, completedBy: null };
-      mockSchedules = [row, ...mockSchedules];
-      return row;
-    }
+  create(payload) {
     // POST /schedules { title, description, assignedTo, dueDate } — guide §2
     return apiFetch("/schedules", { method: "POST", body: JSON.stringify(payload) });
   },
-  async complete(id, me) {
-    if (USE_MOCK) {
-      await delay();
-      const row = { ...mockSchedules.find((s) => s._id === id), status: "completed", completedAt: new Date().toISOString(), completedBy: me };
-      mockSchedules = mockSchedules.map((s) => (s._id === id ? row : s));
-      return row;
-    }
+  bulkCreate(items) {
+    // POST /schedules/bulk { items: [{ title, description, assignedTo, dueDate }] }
+    return apiFetch("/schedules/bulk", { method: "POST", body: JSON.stringify({ items }) });
+  },
+  complete(id) {
     // PATCH /schedules/:id/complete — server stamps completedAt/completedBy (guide §2)
     return apiFetch(`/schedules/${id}/complete`, { method: "PATCH" });
   },
@@ -399,17 +365,13 @@ export const useSchedulePage = () => {
 
     setSubmitting(true);
     try {
-      const me = JSON.parse(localStorage.getItem("user") || "null");
-      const created = await api.create(
-        {
-          title,
-          description,
-          assignedTo: form.assignedTo,
-          // Noon UTC keeps the calendar day stable across timezones.
-          dueDate: `${form.dueDate}T12:00:00.000Z`,
-        },
-        me
-      );
+      const created = await api.create({
+        title,
+        description,
+        assignedTo: form.assignedTo,
+        // Noon UTC keeps the calendar day stable across timezones.
+        dueDate: `${form.dueDate}T12:00:00.000Z`,
+      });
       setSchedules((prev) => [normalizeSchedule(created), ...prev]);
       resetForm();
       setFormOpen(false);
@@ -419,6 +381,99 @@ export const useSchedulePage = () => {
       else setFormError(err.message || "Failed to create schedule.");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // ── excel import ───────────────────────────────────────────────────────────
+  // Flow: pick file → parse + validate in the browser → preview dialog →
+  // confirm → POST valid rows to /schedules/bulk in chunks.
+  const EMPTY_IMPORT = { open: false, fileName: "", rows: [], missingColumns: [], error: "" };
+  const [importState, setImportState] = useState(EMPTY_IMPORT);
+  const [importParsing, setImportParsing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
+
+  const openImport = () => {
+    if (!canManage) { denyAccess("import schedules"); return; }
+    setImportState({ ...EMPTY_IMPORT, open: true });
+  };
+
+  const closeImport = () => {
+    if (importing) return; // don't close mid-upload
+    setImportState(EMPTY_IMPORT);
+    setImportProgress(0);
+  };
+
+  const handleImportFile = async (file) => {
+    if (!file) return;
+    setImportParsing(true);
+    setImportState({ ...EMPTY_IMPORT, open: true, fileName: file.name });
+    try {
+      const { rows, missingColumns } = await parseScheduleFile(file, assignees, schedules);
+      setImportState({ open: true, fileName: file.name, rows, missingColumns, error: "" });
+    } catch (err) {
+      setImportState({ ...EMPTY_IMPORT, open: true, fileName: file.name, error: err.message });
+    } finally {
+      setImportParsing(false);
+    }
+  };
+
+  const importSummary = useMemo(() => {
+    const total = importState.rows.length;
+    const invalid = importState.rows.filter((r) => r.errors.length).length;
+    const duplicates = importState.rows.filter((r) => !r.errors.length && r.duplicate).length;
+    const toImport = importState.rows.filter(
+      (r) => !r.errors.length && !(skipDuplicates && r.duplicate)
+    ).length;
+    return { total, invalid, duplicates, toImport };
+  }, [importState.rows, skipDuplicates]);
+
+  const confirmImport = async () => {
+    if (!canManage) { denyAccess("import schedules"); return; }
+    const entries = importState.rows
+      .filter((r) => !r.errors.length && !(skipDuplicates && r.duplicate))
+      .map(({ data }) => ({
+        title: data.title,
+        description: data.description,
+        assignedTo: data.assignedTo,
+        // Noon UTC keeps the calendar day stable across timezones.
+        dueDate: `${data.dueDate}T12:00:00.000Z`,
+      }));
+    if (entries.length === 0) return;
+
+    setImporting(true);
+    setImportProgress(0);
+    const created = [];
+    try {
+      for (let i = 0; i < entries.length; i += IMPORT_CHUNK) {
+        const chunk = entries.slice(i, i + IMPORT_CHUNK);
+        const data = await api.bulkCreate(chunk);
+        created.push(...(data.created || []).map(normalizeSchedule));
+        setImportProgress(Math.round(((i + chunk.length) / entries.length) * 100));
+      }
+      setSchedules((prev) => [...created, ...prev]);
+      setImportState(EMPTY_IMPORT);
+      showToast(`${created.length} task${created.length === 1 ? "" : "s"} imported.`);
+    } catch (err) {
+      // Earlier chunks may already be saved — show them and say so.
+      if (created.length) setSchedules((prev) => [...created, ...prev]);
+      setImportState(EMPTY_IMPORT);
+      showErrorDialog(
+        err.status === 403 ? "Access Denied" : "Import stopped",
+        `${err.message}${created.length ? ` ${created.length} of ${entries.length} tasks were saved before the error. Re-importing the same file will skip those (duplicates are detected).` : " Nothing was saved."}`
+      );
+    } finally {
+      setImporting(false);
+      setImportProgress(0);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      await downloadScheduleTemplate(assignees);
+    } catch (err) {
+      showToast(err.message || "Could not create the template.", "error");
     }
   };
 
@@ -434,8 +489,7 @@ export const useSchedulePage = () => {
     confirmDialogAction.current = async () => {
       setCompletingId(id);
       try {
-        const me = JSON.parse(localStorage.getItem("user") || "null");
-        const updated = await api.complete(id, me);
+        const updated = await api.complete(id);
         setSchedules((prev) => prev.map((s) => (s.id === id ? normalizeSchedule(updated) : s)));
         showToast("Task marked as completed.");
       } catch (err) {
@@ -466,6 +520,10 @@ export const useSchedulePage = () => {
     // form
     formOpen, setFormOpen, form, formError, submitting,
     handleChange, handleSubmit, handleCancelForm,
+    // excel import
+    importState, importParsing, importing, importProgress, importSummary,
+    skipDuplicates, setSkipDuplicates,
+    openImport, closeImport, handleImportFile, confirmImport, handleDownloadTemplate,
     // completion
     handleComplete, completingId,
     confirmDialog, closeConfirmDialog, submitConfirmDialog,
@@ -473,6 +531,5 @@ export const useSchedulePage = () => {
     toast, closeToast, errorDialog, closeErrorDialog,
     // permissions + meta
     canManage,
-    isMock: USE_MOCK,
   };
 };

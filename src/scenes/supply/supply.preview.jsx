@@ -30,8 +30,9 @@ export const isSupplyPreview =
 const b64url = (obj) =>
   btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-export const seedSupplyPreviewSession = () => {
-  if (!isSupplyPreview) return;
+// Writes the fake superadmin session. No guard here — callers (the supply and
+// store previews) only call it when their own flag is on.
+export const seedFakePreviewSession = () => {
   try {
     const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7; // 7 days
     localStorage.setItem("token", `${b64url({ alg: "none", typ: "JWT" })}.${b64url({ exp })}.preview`);
@@ -45,11 +46,16 @@ export const seedSupplyPreviewSession = () => {
         permissions: [],
       })
     );
-    // eslint-disable-next-line no-console
-    console.info("[supply preview] signed in as fake superadmin (dev only)");
   } catch {
     /* storage unavailable — nothing to seed */
   }
+};
+
+export const seedSupplyPreviewSession = () => {
+  if (!isSupplyPreview) return;
+  seedFakePreviewSession();
+  // eslint-disable-next-line no-console
+  console.info("[supply preview] signed in as fake superadmin (dev only)");
 };
 
 // Runs once when this module is first imported. supply.jsx is imported by

@@ -46,6 +46,8 @@ import {
   statusStyles,
   getStatusIcon,
   getTabColor,
+  formatFileSize,
+  MAX_FILES,
   useReportsPage,
 } from "./reports.logic";
 import { useDateFormat } from "../settings/dateFormat.logic";
