@@ -33,8 +33,8 @@ import {
 //   {
 //     _id,
 //     client:        ref Client   // the client who is OWED (the one taken FROM)
-//     partNumber:    String       // trim + uppercase before saving, so
-//                                 // "pr-1001 " and "PR-1001" are the same part
+//     serialNumber:  String       // trim + uppercase before saving, so
+//                                 // "sn-1001 " and "SN-1001" are the same item
 //     goodsSupplied: String       // description, for display
 //     qtyChange:     Number       // NEGATIVE = taken (we owe more)
 //                                 // POSITIVE = repaid / reversed (we owe less)
@@ -44,7 +44,7 @@ import {
 //     createdBy:     ref User     // from the TOKEN, never from the request body
 //     createdAt:     Date
 //   }
-//   Index:  { client: 1, partNumber: 1 }  and  { relatedSupply: 1 }
+//   Index:  { client: 1, serialNumber: 1 }  and  { relatedSupply: 1 }
 //   NEVER update or delete ledger rows. Corrections = a new row.
 //
 // ── 2. ADD TO THE EXISTING Supply model ──────────────────────────────────────
@@ -61,7 +61,7 @@ import {
 //     c) In ONE database transaction:
 //          i.  insert the Supply row (with takenFrom + transferNote)
 //          ii. insert a ledger row:
-//              { client: takenFromClientId, partNumber, goodsSupplied,
+//              { client: takenFromClientId, serialNumber, goodsSupplied,
 //                qtyChange: -quantity, type: "borrowed_out",
 //                relatedSupply: supply._id, note: transferNote,
 //                createdBy: req.user._id }
@@ -77,7 +77,7 @@ import {
 //   Returns what is currently owed, aggregated from the ledger. Users with the
 //   "supply" OR "store" permission may read it (the Store page shows it too).
 //   Response: array of
-//     { client: { _id, id, companyName }, partNumber, goodsSupplied,
+//     { client: { _id, id, companyName }, serialNumber, goodsSupplied,
 //       owed: Number /* positive */, lastTakenAt: Date }
 //   Only include groups whose total is below zero. (A total at or above zero
 //   means nothing is owed. It can go positive if a supply entry is deleted
@@ -86,21 +86,21 @@ import {
 //
 //     SupplyLedger.aggregate([
 //       { $group: {
-//           _id:   { client: "$client", partNumber: "$partNumber" },
+//           _id:   { client: "$client", serialNumber: "$serialNumber" },
 //           total: { $sum: "$qtyChange" },
 //           goodsSupplied: { $last: "$goodsSupplied" },
 //           lastTakenAt: { $max: { $cond: [{ $eq: ["$type", "borrowed_out"] }, "$createdAt", null] } },
 //       }},
 //       { $match: { total: { $lt: 0 } } },
-//       { $project: { client: "$_id.client", partNumber: "$_id.partNumber",
+//       { $project: { client: "$_id.client", serialNumber: "$_id.serialNumber",
 //                     goodsSupplied: 1, lastTakenAt: 1, owed: { $multiply: ["$total", -1] } } },
 //     ])
 //     // then populate client { companyName } before responding
 //
 // ── 5. NEW ROUTE:  POST /supply/owed/repay ───────────────────────────────────
-//   Body: { clientId, partNumber, quantity, note }
+//   Body: { clientId, serialNumber, quantity, note }
 //   - Same permission rule as step 3a.
-//   - Recalculate the current owed for (clientId, partNumber) INSIDE the
+//   - Recalculate the current owed for (clientId, serialNumber) INSIDE the
 //     transaction and reject (400) if quantity <= 0 or quantity > owed, so two
 //     people repaying at once can't overpay.
 //   - Insert a ledger row: { qtyChange: +quantity, type: "settled", note,
@@ -165,14 +165,13 @@ const safeJson = async (res) => {
 
 export const exportCSV = (rows) => {
   const headers = [
-    "ID", "Goods Supplied", "Serial Number", "Part Number", "Qty",
+    "ID", "Goods Supplied", "Serial Number", "Qty",
     "Client", "Supply Date", "Taken From", "Transfer Note", "Logged By", "Attachments",
   ];
   const data = rows.map((r) => [
     r.id ?? r._id,
     r.goodsSupplied,
     r.serialNumber ?? "",
-    r.partNumber,
     r.quantity,
     r.client?.companyName ?? "",
     r.supplyDate,
@@ -224,7 +223,6 @@ export const fileIcon = (filename) => {
 const EMPTY_FORM = {
   goodsSupplied: "",
   serialNumber: "", // must match a part in the Store; stock is deducted from it
-  partNumber: "",
   quantity: "",
   supplyDate: "",
   clientId: "",
@@ -252,7 +250,7 @@ export const useSupply = () => {
   const [selectedIds, setSelectedIds] = useState([]);
 
   // ── owed-to-clients state ───────────────────────────────────────────────────
-  // owed: [{ client, partNumber, goodsSupplied, owed, lastTakenAt }]
+  // owed: [{ client, serialNumber, goodsSupplied, owed, lastTakenAt }]
   const [owed,       setOwed]       = useState([]);
   const [owedOpen,   setOwedOpen]   = useState(false);
   const [repayDialog, setRepayDialog] = useState({ open: false, item: null, quantity: "", note: "", error: "" });
@@ -420,7 +418,6 @@ export const useSupply = () => {
       const matchSearch =
         !q ||
         r.goodsSupplied?.toLowerCase().includes(q) ||
-        r.partNumber?.toLowerCase().includes(q) ||
         r.serialNumber?.toLowerCase().includes(q) ||
         r.client?.companyName?.toLowerCase().includes(q) ||
         (r.user ? `${r.user.firstName} ${r.user.surname}` : "").toLowerCase().includes(q);
@@ -470,10 +467,9 @@ export const useSupply = () => {
       return;
     }
 
-    const { goodsSupplied, serialNumber, partNumber, quantity, supplyDate, clientId, takenFromClientId, transferNote } = form;
+    const { goodsSupplied, serialNumber, quantity, supplyDate, clientId, takenFromClientId, transferNote } = form;
     if (!goodsSupplied.trim()) { setFormError("Goods Supplied is required."); return; }
     if (!serialNumber.trim())  { setFormError("Serial Number is required.");  return; }
-    if (!partNumber.trim())    { setFormError("Part Number is required.");    return; }
     if (!quantity || Number(quantity) <= 0) { setFormError("Enter a valid quantity."); return; }
     if (!supplyDate)           { setFormError("Supply Date is required.");    return; }
     if (!clientId)             { setFormError("Please select a client.");     return; }
@@ -492,7 +488,6 @@ export const useSupply = () => {
       const fd = new FormData();
       fd.append("goodsSupplied", goodsSupplied);
       fd.append("serialNumber",  serialNumber.trim());
-      fd.append("partNumber",    partNumber);
       fd.append("quantity",      quantity);
       fd.append("supplyDate",    supplyDate);
       fd.append("clientId",      clientId);
@@ -599,7 +594,7 @@ export const useSupply = () => {
   };
 
   // ── repaying what is owed ─────────────────────────────────────────────────
-  // POST /supply/owed/repay { clientId, partNumber, quantity, note } (guide step 5)
+  // POST /supply/owed/repay { clientId, serialNumber, quantity, note } (guide step 5)
   const openRepay = (item) => {
     if (!canTransfer) {
       showErrorDialog("Access Denied", "Only administrators and superadmins can record repayments.");
@@ -627,7 +622,7 @@ export const useSupply = () => {
       const clientId = item.client?.id ?? item.client?._id;
       await repayOwed({
         clientId,
-        partNumber: item.partNumber,
+        serialNumber: item.serialNumber,
         goodsSupplied: item.goodsSupplied,
         quantity: qty,
         note: note.trim(),

@@ -72,7 +72,7 @@ const Line = () => {
     const byPart = {};
     supply.forEach((item) => {
       if (!byPart[item.goodsSupplied]) {
-        byPart[item.goodsSupplied] = { name: item.goodsSupplied, partNumber: item.partNumber, quantity: 0 };
+        byPart[item.goodsSupplied] = { name: item.goodsSupplied, serialNumber: item.serialNumber, quantity: 0 };
       }
       byPart[item.goodsSupplied].quantity += item.quantity;
     });
@@ -182,7 +182,7 @@ const Line = () => {
           </Typography>
           <Box display="flex" flexDirection="column" gap="10px">
             {topParts.map((part, idx) => (
-              <Box key={part.partNumber} display="flex" alignItems="center" gap="10px">
+              <Box key={part.name} display="flex" alignItems="center" gap="10px">
                 <Typography
                   fontSize="12px"
                   fontWeight="700"
@@ -196,7 +196,7 @@ const Line = () => {
                     {part.name}
                   </Typography>
                   <Typography fontSize="11px" color={colors.grey[500]}>
-                    {part.partNumber}
+                    {part.serialNumber}
                   </Typography>
                 </Box>
                 <Typography fontSize="13px" fontWeight="700" color={colors.blueAccent[400]}>

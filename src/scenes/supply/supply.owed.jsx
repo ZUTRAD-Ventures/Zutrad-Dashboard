@@ -4,7 +4,7 @@
 //
 //   fetchOwedList()  → GET  /supply/owed            (what we owe, aggregated)
 //   repayOwed(...)   → POST /supply/owed/repay      (stock was replaced)
-//   owedByPart(list) → Map keyed by normalised part number (for the Store page)
+//   owedBySerial(list) → Map keyed by normalised serial number (for the Store page)
 //
 // The backend contract for these endpoints and the ledger collection is written
 // up in the BACKEND GUIDE at the top of supply.logic.jsx (and the Store side in
@@ -24,9 +24,10 @@ export const TRANSFER_REQUIRES_ADMIN = true;
 export const canRecordTransfers = () =>
   TRANSFER_REQUIRES_ADMIN ? isAdminOrSuper() : hasPermission("supply");
 
-// "pr-1001 " and "PR-1001" are the same part. The backend must normalise the
-// same way (trim + uppercase) when saving ledger rows and comparing parts.
-export const partKey = (p) => String(p ?? "").trim().toUpperCase();
+// "sn-1001 " and "SN-1001" are the same item. The backend normalises the same
+// way (trim + uppercase) when saving ledger rows. Owed stock is tracked per
+// serial number, not per part number.
+export const serialKey = (s) => String(s ?? "").trim().toUpperCase();
 
 const authBearer = () => ({ Authorization: `Bearer ${localStorage.getItem("token")}` });
 const authJson = () => ({ "Content-Type": "application/json", ...authBearer() });
@@ -43,7 +44,7 @@ const safeJson = async (res) => {
 
 // ── API ──────────────────────────────────────────────────────────────────────
 
-// → [{ client, partNumber, goodsSupplied, owed, lastTakenAt }]. Throws on error.
+// → [{ client, serialNumber, goodsSupplied, owed, lastTakenAt }]. Throws on error.
 export const fetchOwedList = async () => {
   const res = await fetch(`${API_BASE}/supply/owed`, { headers: authBearer() });
   const data = await safeJson(res);
@@ -52,28 +53,28 @@ export const fetchOwedList = async () => {
 };
 
 // Record that `quantity` units were replaced for a client. Throws on error.
-export const repayOwed = async ({ clientId, partNumber, goodsSupplied, quantity, note }) => {
+export const repayOwed = async ({ clientId, serialNumber, goodsSupplied, quantity, note }) => {
   const res = await fetch(`${API_BASE}/supply/owed/repay`, {
     method: "POST",
     headers: authJson(),
-    body: JSON.stringify({ clientId, partNumber, quantity, note }),
+    body: JSON.stringify({ clientId, serialNumber, quantity, note }),
   });
   const data = await safeJson(res);
   if (!res.ok) throw new Error(data.message || "Failed to record repayment.");
 };
 
-// Group the owed list by part so the Store page can look a part up quickly.
-// → Map( "PR-1001" → { total: 6, entries: [{ clientId, companyName, partNumber, goodsSupplied, owed }] } )
-export const owedByPart = (list) => {
+// Group the owed list by serial number so the Store page can look an item up quickly.
+// → Map( "SN-1001" → { total: 6, entries: [{ clientId, companyName, serialNumber, goodsSupplied, owed }] } )
+export const owedBySerial = (list) => {
   const map = new Map();
   (list || []).forEach((o) => {
-    const k = partKey(o.partNumber);
+    const k = serialKey(o.serialNumber);
     const g = map.get(k) || { total: 0, entries: [] };
     g.total += Number(o.owed) || 0;
     g.entries.push({
       clientId: o.client?.id ?? o.client?._id,
       companyName: o.client?.companyName,
-      partNumber: o.partNumber,
+      serialNumber: o.serialNumber,
       goodsSupplied: o.goodsSupplied,
       owed: Number(o.owed) || 0,
     });
