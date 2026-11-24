@@ -1,0 +1,7 @@
+$env:REACT_APP_API_BASE = "http://localhost:5000"
+npm start
+
+git status
+git fetch origin
+git merge origin/main
+git push origin Authur
