@@ -303,6 +303,7 @@ const StorePage = () => {
     errorDialog,
     closeErrorDialog,
     canAddPart,
+    canImport,
     canDelete,
     canExport,
     clients,
@@ -332,19 +333,20 @@ const StorePage = () => {
       >
         <Header title="STORE" subtitle="Parts Inventory by Machine Type" />
         <Box display="flex" gap="10px" flexWrap="wrap">
-          <Tooltip title={canAddPart ? "Add many parts at once from an Excel or CSV file" : "Store access required"}>
+          {canImport && (
+          <Tooltip title={"Add many parts at once from an Excel or CSV file"}>
             <span>
               <Button
                 variant="outlined"
                 startIcon={<UploadFileOutlinedIcon />}
                 onClick={openImportIfAuthorised}
                 sx={{
-                  borderColor: canAddPart ? colors.greenAccent[600] : colors.grey[700],
-                  color: canAddPart ? colors.greenAccent[400] : colors.grey[600],
+                  borderColor: colors.greenAccent[600],
+                  color: colors.greenAccent[400],
                   height: "40px",
                   "&:hover": {
-                    borderColor: canAddPart ? colors.greenAccent[400] : colors.grey[600],
-                    backgroundColor: canAddPart ? colors.greenAccent[900] : "transparent",
+                    borderColor: colors.greenAccent[400],
+                    backgroundColor: colors.greenAccent[900],
                   },
                 }}
               >
@@ -352,6 +354,7 @@ const StorePage = () => {
               </Button>
             </span>
           </Tooltip>
+          )}
           <Tooltip title={canExport ? "Export to CSV" : "Admin access required to export"}>
             <span>
               <Button

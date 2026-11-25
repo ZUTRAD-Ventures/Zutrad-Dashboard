@@ -35,7 +35,6 @@ import Header from "../../components/Header";
 import ConfirmDialog from "../../components/ConfirmDialog";
 
 import {
-  statusColor,
   isMaintenanceDue,
   useAllClientsLogic,
 } from "./allClients.logic";
@@ -87,7 +86,6 @@ const MachineSubRow = ({ machines, colors, canDelete, onDeleteMachine, onCopySer
       </Box>
     ) : (
       machines.map((m) => {
-        const sc = statusColor(m.usageStatus, colors);
         const maintDue = isMaintenanceDue(m.lastMaintenanceDate);
         return (
           <Box
@@ -128,11 +126,6 @@ const MachineSubRow = ({ machines, colors, canDelete, onDeleteMachine, onCopySer
                 Maint: {m.lastMaintenanceDate || "N/A"}
               </Typography>
             </Box>
-
-            <Chip
-              label={m.usageStatus} size="small"
-              sx={{ backgroundColor: sc.bg, color: sc.text, fontSize: "11px", textTransform: "capitalize", fontWeight: 600 }}
-            />
 
             <Box flex={1} />
 
