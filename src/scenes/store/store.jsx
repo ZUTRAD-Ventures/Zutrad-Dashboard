@@ -196,7 +196,7 @@ const buildColumns = ({
             icon={<SwapHorizOutlinedIcon />}
             label={`Owed ${row.owedQty}${row.freeQty < 0 ? " · short" : ""}`}
             size="small"
-            onClick={canSettle ? () => openSettle(row.serialNumber, row.machinePart, null) : undefined}
+            onClick={canSettle ? () => openSettle(row.partNumber, row.machinePart, null) : undefined}
             sx={{
               backgroundColor: colors.redAccent[800],
               color: colors.redAccent[200],
@@ -499,7 +499,7 @@ const StorePage = () => {
             borderTop={`1px solid ${colors.primary[300]}`}
           >
             <TextField variant="filled" label="Serial Number" name="serialNumber" value={form.serialNumber} onChange={handleFormChange} fullWidth />
-            <TextField variant="filled" label="Part Number (optional)" name="partNumber" value={form.partNumber} onChange={handleFormChange} fullWidth />
+            <TextField variant="filled" label="Part Number" name="partNumber" value={form.partNumber} onChange={handleFormChange} fullWidth />
             <TextField variant="filled" label="Description" name="machinePart" value={form.machinePart} onChange={handleFormChange} fullWidth />
             <TextField
               variant="filled"
@@ -619,9 +619,9 @@ const StorePage = () => {
         <DialogContent>
           <DialogContentText sx={{ color: colors.grey[300], fontSize: "13px", mb: "14px" }}>
             {settleDialog.restocked != null
-              ? <>You added <b>{settleDialog.restocked}</b> × <b>{settleDialog.description}</b> ({settleDialog.serialNumber}). </>
-              : <><b>{settleDialog.description}</b> ({settleDialog.serialNumber}). </>}
-            We owe these clients stock for this item. Enter how many units of it
+              ? <>You added <b>{settleDialog.restocked}</b> × <b>{settleDialog.description}</b> ({settleDialog.partNumber}). </>
+              : <><b>{settleDialog.description}</b> ({settleDialog.partNumber}). </>}
+            We owe these clients stock for this part. Enter how many units of it
             replace what was taken, or choose “No” if it’s just general stock.
           </DialogContentText>
           <Box display="flex" flexDirection="column" gap="10px">
@@ -680,7 +680,7 @@ const StorePage = () => {
             <Box display="flex" flexDirection="column" gap="14px" py="4px">
               <Typography color={colors.grey[300]} fontSize="13px">
                 Upload an <b>.xlsx</b>, <b>.xls</b> or <b>.csv</b> file. The first row must be a header with these
-                columns (any order): <b>Serial Number, Description, Machine, Quantity</b>. An optional <b>Part Number</b> column is also read.
+                columns (any order): <b>Serial Number, Part Number, Description, Machine, Quantity</b>.
                 Machine must be one of: {MACHINE_TYPES.join(", ")}. Quantity must be 0 or more.
                 An optional <b>Client</b> column marks which client owns the part; it must match an existing client name.
                 {!isAllTab && ` If the file has no Machine column, every row is added to ${currentMachineType}.`}
@@ -781,7 +781,7 @@ const StorePage = () => {
                       sx={{ color: `${colors.greenAccent[300]} !important` }}
                     />
                   }
-                  label={<Typography fontSize="12px" color={colors.grey[300]}>Skip rows that already exist (same serial number)</Typography>}
+                  label={<Typography fontSize="12px" color={colors.grey[300]}>Skip rows that already exist (same serial number, part number and machine)</Typography>}
                 />
               )}
 

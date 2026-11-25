@@ -104,8 +104,8 @@ const SupplyPage = () => {
     },
 
     {
-      field: "serialNumber",
-      headerName: "Serial Number",
+      field: "partNumber",
+      headerName: "Part Number",
       flex: 0.9,
       renderCell: ({ value }) => (
         <Chip
@@ -351,6 +351,11 @@ const SupplyPage = () => {
               error={!!formError && !form.serialNumber}
             />
             <TextField
+              variant="filled" label="Part Number" name="partNumber"
+              value={form.partNumber} onChange={handleChange} fullWidth
+              error={!!formError && !form.partNumber}
+            />
+            <TextField
               variant="filled" label="Quantity" name="quantity" type="number"
               value={form.quantity} onChange={handleChange} fullWidth
               error={!!formError && (!form.quantity || Number(form.quantity) <= 0)}
@@ -524,7 +529,7 @@ const SupplyPage = () => {
                 <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
-                      {["Client we owe", "Serial Number", "Goods", "Owed", "Last Taken", ""].map((h) => (
+                      {["Client we owe", "Part Number", "Goods", "Owed", "Last Taken", ""].map((h) => (
                         <TableCell
                           key={h || "action"}
                           sx={{ backgroundColor: colors.primary[400], color: colors.grey[300], fontSize: "11px", fontWeight: 700, borderBottom: `1px solid ${colors.primary[300]}` }}
@@ -538,9 +543,9 @@ const SupplyPage = () => {
                     {owed.map((o) => {
                       const cell = { fontSize: "12px", color: colors.grey[100], borderBottom: `1px solid ${colors.primary[300]}` };
                       return (
-                        <TableRow key={`${o.client?.id ?? o.client?._id}-${o.serialNumber}`}>
+                        <TableRow key={`${o.client?.id ?? o.client?._id}-${o.partNumber}`}>
                           <TableCell sx={cell}>{o.client?.companyName}</TableCell>
-                          <TableCell sx={{ ...cell, fontFamily: "monospace" }}>{o.serialNumber}</TableCell>
+                          <TableCell sx={{ ...cell, fontFamily: "monospace" }}>{o.partNumber}</TableCell>
                           <TableCell sx={cell}>{o.goodsSupplied}</TableCell>
                           <TableCell sx={{ ...cell, color: colors.redAccent[300], fontWeight: 700 }}>
                             -{Number(o.owed).toLocaleString()}
@@ -756,7 +761,7 @@ const SupplyPage = () => {
           <DialogContentText sx={{ color: colors.grey[300], fontSize: "13px", mb: "14px" }}>
             Stock replaced for{" "}
             <b>{repayDialog.item?.client?.companyName}</b> —{" "}
-            <b>{repayDialog.item?.serialNumber}</b> (currently owed: {repayDialog.item?.owed}).
+            <b>{repayDialog.item?.partNumber}</b> (currently owed: {repayDialog.item?.owed}).
           </DialogContentText>
           <Box display="flex" flexDirection="column" gap="12px">
             <TextField

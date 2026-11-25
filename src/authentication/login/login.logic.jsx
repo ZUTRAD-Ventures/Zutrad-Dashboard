@@ -5,7 +5,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
-const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
+const API_BASE = "http://localhost:5000";
 
 // ── security constants ────────────────────────────────────────────────────────
 const MAX_ATTEMPTS      = 5;    // lockout after this many consecutive failures

@@ -33,6 +33,13 @@ const safeJson = async (res) => {
   }
 };
 
+// Client-side upload limits. These give instant feedback before the upload,
+// but the SERVER must enforce its own limits too (never trust the client).
+// Adjust to match your multer config.
+const MAX_FILES = 5;
+const MAX_FILE_SIZE_MB = 10;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
 /* =========================================================================
    CONFIG
    ========================================================================= */
@@ -174,6 +181,7 @@ export const useReportsPage = () => {
   const [form, setForm] = useState({ reportDetails: "", lineNumber: "", clientId: "" });
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [files, setFiles] = useState([]); // File objects chosen for the new report
 
   // Real File objects chosen via <input type="file">.
   // We store the File objects themselves (not just names) because FormData
@@ -274,9 +282,9 @@ export const useReportsPage = () => {
     e.target.value = "";
 
     // Reject oversized files up front, with a clear message
-    const tooBig = picked.find((f) => f.size > MAX_FILE_SIZE);
+    const tooBig = picked.find((f) => f.size > MAX_FILE_SIZE_BYTES);
     if (tooBig) {
-      setFormError(`"${tooBig.name}" is larger than ${MAX_FILE_SIZE / (1024 * 1024)} MB.`);
+      setFormError(`"${tooBig.name}" is larger than ${MAX_FILE_SIZE_MB} MB.`);
       return;
     }
 
@@ -299,6 +307,51 @@ export const useReportsPage = () => {
     // Clear files too, otherwise they'd leak into the next report
     setAttachments([]);
     setFormError("");
+
+    const tooBig = incoming.filter((f) => f.size > MAX_FILE_SIZE);
+    if (tooBig.length) {
+      setFormError(`${tooBig.map((f) => f.name).join(", ")} exceeds the ${MAX_FILE_SIZE / (1024 * 1024)} MB limit.`);
+    }
+    const ok = incoming.filter((f) => f.size <= MAX_FILE_SIZE);
+
+    setFiles((prev) => {
+      // skip exact duplicates (same name + size + last modified)
+      const fresh = ok.filter(
+        (f) => !prev.some((p) => p.name === f.name && p.size === f.size && p.lastModified === f.lastModified)
+      );
+      const next = [...prev, ...fresh];
+      if (next.length > MAX_FILES) {
+        setFormError(`You can attach up to ${MAX_FILES} files.`);
+        return next.slice(0, MAX_FILES);
+      }
+      return next;
+    });
+  };
+
+  const handleRemoveFile = (index) =>
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+
+  // Downloads need the auth header, so fetch as a blob instead of a plain link.
+  const handleDownloadAttachment = async (reportId, attachment) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/reports/${reportId}/files/${encodeURIComponent(attachment.storedName)}`,
+        { headers: authOnlyHeaders() }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "Failed to download file.");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = attachment.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast(err.message, "error");
+    }
   };
 
   const handleCancelForm = () => {

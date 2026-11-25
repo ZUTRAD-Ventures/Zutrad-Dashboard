@@ -15,7 +15,6 @@ export const ACCEPTED_EXT = [".xlsx", ".xls", ".csv"];
 // spaces, dots, underscores and punctuation ("Part No." == "part_no").
 const HEADER_ALIASES = {
   serialNumber: ["serialnumber", "serialno", "serialnum", "serial", "sn", "slno"],
-  // OPTIONAL: not required, and not used to match owed stock (serial number is).
   partNumber:   ["partnumber", "partno", "partnum", "part", "pn", "partcode", "sku"],
   machinePart:  ["description", "machinepart", "partdescription", "partname", "item", "items", "product", "goods"],
   machine:      ["machine", "machinetype", "type", "machinemodel"],
@@ -26,7 +25,7 @@ const HEADER_ALIASES = {
 
 // Columns that must exist. (Machine becomes optional when the caller passes a
 // defaultMachine — e.g. the machine tab the user is currently on.)
-const REQUIRED_FIELDS = ["serialNumber", "machinePart", "machine", "quantity"];
+const REQUIRED_FIELDS = ["serialNumber", "partNumber", "machinePart", "machine", "quantity"];
 
 export const FIELD_LABELS = {
   serialNumber: "Serial Number",
@@ -102,7 +101,7 @@ export const parseStoreFile = async (file, machineTypes, existing = [], opts = {
   }
   if (headerIdx === -1) {
     throw new Error(
-      "Could not find the header row. The first row should contain: Serial Number, Description, Machine, Quantity (Part Number is optional). Use the template if unsure."
+      "Could not find the header row. The first row should contain: Serial Number, Part Number, Description, Machine, Quantity. Use the template if unsure."
     );
   }
 
@@ -119,9 +118,8 @@ export const parseStoreFile = async (file, machineTypes, existing = [], opts = {
 
   const machineByName = new Map(machineTypes.map((m) => [norm(m), m]));
   const clientByName = new Map(clientNames.map((n) => [norm(n), n]));
-  // serial numbers are unique across the whole store, so the serial alone identifies a duplicate
-  const keyOf = (serial) => norm(serial);
-  const existingKeys = new Set(existing.map((r) => keyOf(r.serialNumber)));
+  const keyOf = (serial, part, machine) => [norm(serial), norm(part), norm(machine)].join("|");
+  const existingKeys = new Set(existing.map((r) => keyOf(r.serialNumber, r.partNumber, r.machine)));
   const seenInFile = new Set();
 
   const rows = dataRows.map((r, i) => {
@@ -141,6 +139,7 @@ export const parseStoreFile = async (file, machineTypes, existing = [], opts = {
     const client = clientRaw ? clientByName.get(norm(clientRaw)) : "";
 
     if (!serialNumber) errors.push("Serial Number is empty");
+    if (!partNumber) errors.push("Part Number is empty");
     if (!machinePart) errors.push("Description is empty");
     if (quantity === null) errors.push("Quantity must be a number that is 0 or greater");
     if (clientRaw && !client) errors.push(`Client "${clientRaw}" not found`);
@@ -149,7 +148,7 @@ export const parseStoreFile = async (file, machineTypes, existing = [], opts = {
 
     let duplicate = false;
     if (!errors.length) {
-      const k = keyOf(serialNumber);
+      const k = keyOf(serialNumber, partNumber, machine);
       duplicate = existingKeys.has(k) || seenInFile.has(k);
       seenInFile.add(k);
     }
@@ -176,10 +175,10 @@ export const downloadStoreTemplate = async (machineTypes) => {
 
   const help = XLSX.utils.aoa_to_sheet([
     ["How to fill in the Store sheet"],
-    ["Required: Serial Number, Description, Machine, Quantity. Part Number is optional (leave it blank if there is none)."],
+    ["Required: Serial Number, Part Number, Description, Machine, Quantity."],
     ["Machine must be one of the names on the 'Machines' sheet.  Quantity must be 0 or more."],
     ["Client is optional: leave it blank for general stock, or type an existing client name exactly."],
-    ["Rows whose Serial Number already exists in the Store are flagged as possible duplicates."],
+    ["Rows whose Serial Number + Part Number + Machine already exist in the Store are flagged as possible duplicates."],
     ["Only the first sheet is imported. Maximum 5,000 rows per file."],
   ]);
   help["!cols"] = [{ wch: 100 }];

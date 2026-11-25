@@ -3,7 +3,7 @@ import { hasPermission, isAdminOrSuper, isSuperAdmin } from "../../utils/auth";
 import { formatDate } from "../../utils/dateFormat";
 import { notifyStoreChanged } from "../../utils/eventbus";
 import { parseStoreFile, downloadStoreTemplate } from "./store.excel";
-import { fetchOwedList, repayOwed, owedBySerial, serialKey, canRecordTransfers } from "../supply/supply.owed";
+import { fetchOwedList, repayOwed, owedByPart, partKey, canRecordTransfers } from "../supply/supply.owed";
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
 
@@ -34,8 +34,8 @@ const safeJson = async (res) => {
    administrator mark it as replaced when new stock arrives.
 
    WHAT THE STORE PAGE CALLS (all already described in the supply guide):
-     GET  /supply/owed          → [{ client, serialNumber, goodsSupplied, owed, lastTakenAt }]
-     POST /supply/owed/repay    → { clientId, serialNumber, quantity, note }
+     GET  /supply/owed          → [{ client, partNumber, goodsSupplied, owed, lastTakenAt }]
+     POST /supply/owed/repay    → { clientId, partNumber, quantity, note }
 
    WHAT YOU NEED TO DO ON THE BACKEND FOR THE STORE:
 
@@ -45,17 +45,18 @@ const safeJson = async (res) => {
       (If the call fails — e.g. a user has neither permission — the Store page
       still works; it just shows no owed column data.)
 
-   2. SERIAL NUMBER MATCHING:
-      the Store page links a store item to owed stock by SERIAL number (part
-      number is optional and not used for this), compared case-insensitively
-      after trimming ("sn-1001 " == "SN-1001"). Ledger rows save serialNumber
-      trimmed + uppercased, so they line up with the Store.
+   2. PART NUMBER MATCHING:
+      the Store page links a store item to owed stock by part number, compared
+      case-insensitively after trimming ("pr-1001 " == "PR-1001"). Normalise
+      partNumber the same way (trim + uppercase) when you SAVE store items and
+      ledger rows — or add a stored  partKey  field to both and match on that.
+      Otherwise "PR-1001" in Store and "pr-1001" in Supply won't line up.
 
    3. SETTLING (POST /supply/owed/repay) — rules to enforce server-side:
       - administrator / superadmin only (same rule as taking stock from another
         client; see TRANSFER_REQUIRES_ADMIN in supply.owed.jsx),
       - quantity > 0 and <= what is currently owed to THAT client for THAT
-        serial number, recalculated inside the transaction (two people settling at once
+        part, recalculated inside the transaction (two people settling at once
         must not overpay),
       - insert a ledger row { qtyChange: +quantity, type: "settled", note,
         createdBy: req.user._id }. Never edit older ledger rows.
@@ -77,7 +78,7 @@ const safeJson = async (res) => {
       already promised; the server doesn't need to store that number.
 
    6. OPTIONAL (performance): instead of a second request, GET /store could
-      return  owed: <total owed for that serialNumber>  on each item (a $lookup /
+      return  owed: <total owed for that partNumber>  on each item (a $lookup /
       join on the aggregated ledger). The page matches client-side today, so
       this is not required.
 
@@ -102,24 +103,25 @@ const safeJson = async (res) => {
       - If you use express.json() raise the limit, e.g. { limit: "1mb" }.
 
    2. REQUEST BODY:
-        { items: [ { serialNumber, partNumber?, machinePart, machine, quantity } ] }
+        { items: [ { serialNumber, partNumber, machinePart, machine, quantity } ] }
       Same field names as POST /store. machine is one of MACHINE_TYPES.
 
    3. SERVER-SIDE VALIDATION (never trust the browser):
       - items: non-empty array, max 500 (else 400).
-      - per item: serialNumber / machinePart non-empty strings, partNumber
-        optional (trim, cap length); machine in the allowed list; quantity finite and >= 0.
+      - per item: serialNumber / partNumber / machinePart non-empty strings
+        (trim, cap length); machine in the allowed list; quantity finite and >= 0.
       - Any invalid item rejects the whole chunk with 400 and a message naming
         the entry, e.g. { message: "Entry 12: quantity must be 0 or more." }.
-      - partNumber is saved trimmed + uppercased when given, blank otherwise.
+      - Normalise partNumber the same way as POST /store (trim + uppercase) so
+        it lines up with the owed ledger (see guide above, step 2).
 
    4. SAVE IN ONE OPERATION:  Store.insertMany(rows)  (or one multi-row INSERT
       in a transaction). Respond 201 { created: [ <item>, ... ] } where every
       item has the SAME shape POST /store returns (incl. _id, updatedAt) — the
       page prepends them to the table without refetching.
 
-   5. DUPLICATES: the page flags rows whose serialNumber
-      already exists and skips them by default. The server may enforce it too
+   5. DUPLICATES: the page flags rows whose serialNumber + partNumber + machine
+      already exist and skips them by default. The server may enforce it too
       (unique index → 409 with a clear message) but doesn't have to.
 
    6. DO NOT auto-settle owed stock here. After an import the page reloads the
@@ -128,7 +130,7 @@ const safeJson = async (res) => {
    7. TEST:
         curl -X POST http://localhost:5000/store/bulk \
           -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
-          -d '{"items":[{"serialNumber":"SN-1","machinePart":"Ribbon","machine":"Macsa ID","quantity":5}]}'
+          -d '{"items":[{"serialNumber":"SN-1","partNumber":"PR-1","machinePart":"Ribbon","machine":"Macsa ID","quantity":5}]}'
    ========================================================================= */
 
 // Rows per request when bulk-importing, so a 5,000-row file doesn't become one
@@ -222,13 +224,13 @@ export const useStorePage = () => {
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [owedOnly, setOwedOnly] = useState(false);
 
-  // owed: [{ client, serialNumber, goodsSupplied, owed, lastTakenAt }] from GET /supply/owed
+  // owed: [{ client, partNumber, goodsSupplied, owed, lastTakenAt }] from GET /supply/owed
   const [owed, setOwed] = useState([]);
   // Real clients for the "Client" dropdown and for checking the import file.
   const [clients, setClients] = useState([]);
   // settleDialog.options: [{ clientId, companyName, owed, quantity (string) }]
   const [settleDialog, setSettleDialog] = useState({
-    open: false, serialNumber: "", description: "", restocked: null, options: [], error: "",
+    open: false, partNumber: "", description: "", restocked: null, options: [], error: "",
   });
   const [settling, setSettling] = useState(false);
   const canSettle = canRecordTransfers();
@@ -337,8 +339,8 @@ export const useStorePage = () => {
     }
 
     const { serialNumber, partNumber, machinePart, machine, quantity } = form;
-    if (!serialNumber.trim() || !machinePart || !machine || quantity === "") {
-      setFormErrorOrAlert("Serial number, description, machine and quantity are required.");
+    if (!serialNumber || !partNumber || !machinePart || !machine || quantity === "") {
+      setFormErrorOrAlert("All fields are required.");
       return;
     }
     const qtyNum = Number(quantity);
@@ -353,8 +355,8 @@ export const useStorePage = () => {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({
-          serialNumber: serialNumber.trim(),
-          partNumber: partNumber.trim(),
+          serialNumber,
+          partNumber,
           machinePart,
           machine,
           quantity: qtyNum,
@@ -366,7 +368,7 @@ export const useStorePage = () => {
 
       setItems((prev) => [data, ...prev]);
       notifyStoreChanged();
-      if (qtyNum > 0) offerSettle(data.serialNumber, data.machinePart, qtyNum);
+      if (qtyNum > 0) offerSettle(data.partNumber, data.machinePart, qtyNum);
       setForm({
         serialNumber: "",
         partNumber: "",
@@ -421,7 +423,7 @@ export const useStorePage = () => {
       setItems((prev) => prev.map((item) => (item._id === id ? data : item)));
       notifyStoreChanged();
       // Stock went UP for a part we owe clients → ask if it's the replacement
-      if (delta > 0) offerSettle(data.serialNumber, data.machinePart, delta);
+      if (delta > 0) offerSettle(data.partNumber, data.machinePart, delta);
     } catch (err) {
       setItems(prevItems); // rollback
       alert(err.message);
@@ -474,7 +476,7 @@ export const useStorePage = () => {
   };
 
   // ---- owed stock: lookup + settle flow ---------------------------------------
-  const owedMap = useMemo(() => owedBySerial(owed), [owed]);
+  const owedMap = useMemo(() => owedByPart(owed), [owed]);
   const totalOwed = useMemo(() => owed.reduce((sum, o) => sum + (Number(o.owed) || 0), 0), [owed]);
 
   // Open the "is this replacing owed stock?" dialog for a part.
@@ -482,27 +484,27 @@ export const useStorePage = () => {
   //               or null when opened manually from the Owed chip (no cap).
   // Only users allowed to record repayments see it (the backend enforces the
   // same rule); everyone else just sees the owed chip as information.
-  const openSettle = (serialNumber, description, restocked = null) => {
+  const openSettle = (partNumber, description, restocked = null) => {
     if (!canSettle) return;
-    const group = owedMap.get(serialKey(serialNumber));
+    const group = owedMap.get(partKey(partNumber));
     if (!group || group.total <= 0) return;
     let left = restocked ?? Infinity;
     const options = group.entries.map((e) => {
       const q = Math.min(e.owed, left);
       left -= q;
-      return { clientId: e.clientId, companyName: e.companyName, goodsSupplied: e.goodsSupplied, serialNumber: e.serialNumber, owed: e.owed, quantity: String(q) };
+      return { clientId: e.clientId, companyName: e.companyName, goodsSupplied: e.goodsSupplied, partNumber: e.partNumber, owed: e.owed, quantity: String(q) };
     });
-    setSettleDialog({ open: true, serialNumber: serialKey(serialNumber), description, restocked, options, error: "" });
+    setSettleDialog({ open: true, partNumber: partKey(partNumber), description, restocked, options, error: "" });
   };
 
   // Called after stock is added: only opens when that part is actually owed.
-  function offerSettle(serialNumber, description, addedQty) {
-    openSettle(serialNumber, description, addedQty);
+  function offerSettle(partNumber, description, addedQty) {
+    openSettle(partNumber, description, addedQty);
   }
 
   const closeSettle = () => {
     if (settling) return;
-    setSettleDialog({ open: false, serialNumber: "", description: "", restocked: null, options: [], error: "" });
+    setSettleDialog({ open: false, partNumber: "", description: "", restocked: null, options: [], error: "" });
   };
 
   const changeSettleQty = (clientId, value) =>
@@ -536,14 +538,14 @@ export const useStorePage = () => {
       for (const o of picks) {
         await repayOwed({
           clientId: o.clientId,
-          serialNumber: o.serialNumber,
+          partNumber: o.partNumber,
           goodsSupplied: o.goodsSupplied,
           quantity: o.qty,
           note: "Replaced from Store restock",
         });
       }
       await fetchOwed();
-      setSettleDialog({ open: false, serialNumber: "", description: "", restocked: null, options: [], error: "" });
+      setSettleDialog({ open: false, partNumber: "", description: "", restocked: null, options: [], error: "" });
       setSuccessMsg(`Recorded ${total} unit${total !== 1 ? "s" : ""} as replaced.`);
       setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err) {
@@ -571,12 +573,12 @@ export const useStorePage = () => {
       const matchesSearch =
         !q ||
         item.machinePart.toLowerCase().includes(q) ||
-        (item.partNumber ?? "").toLowerCase().includes(q) ||
+        item.partNumber.toLowerCase().includes(q) ||
         item.serialNumber.toLowerCase().includes(q) ||
         item.machine.toLowerCase().includes(q) ||
         (item.client?.companyName ?? "").toLowerCase().includes(q);
       const matchesLowStock = !lowStockOnly || item.quantity <= LOW_STOCK_THRESHOLD;
-      const matchesOwed = !owedOnly || (owedMap.get(serialKey(item.serialNumber))?.total ?? 0) > 0;
+      const matchesOwed = !owedOnly || (owedMap.get(partKey(item.partNumber))?.total ?? 0) > 0;
       return matchesMachine && matchesSearch && matchesLowStock && matchesOwed;
     });
   }, [items, isAllTab, currentMachineType, search, lowStockOnly, owedOnly, owedMap]);
@@ -586,14 +588,14 @@ export const useStorePage = () => {
   const rows = useMemo(
     () =>
       filtered.map((item) => {
-        const group = owedMap.get(serialKey(item.serialNumber));
+        const group = owedMap.get(partKey(item.partNumber));
         const owedQty = group?.total ?? 0;
         return {
           ...item,
           id: item._id,
           clientName: item.client?.companyName ?? "", // "" = general stock
           updatedAtDisplay: formatDate(item.updatedAt),
-          owedQty,                          // units we owe clients for this item
+          owedQty,                          // units we owe clients for this part
           owedEntries: group?.entries ?? [], // who we owe, for the tooltip / dialog
           freeQty: item.quantity - owedQty,  // on hand minus already-promised (can be < 0)
         };
