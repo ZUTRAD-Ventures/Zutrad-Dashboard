@@ -208,6 +208,8 @@ export const useStorePage = () => {
   // canDelete: superadmin only
   // canExport: administrator or superadmin only
   const canAddPart = hasPermission("store");
+  // Excel import: superadmin only
+  const canImport = isSuperAdmin();
   const canAdjustQuantity = hasPermission("store");
   const canDelete = isSuperAdmin();
   const canExport = isAdminOrSuper();
@@ -632,11 +634,8 @@ export const useStorePage = () => {
   const [skipDuplicates, setSkipDuplicates] = useState(true);
 
   const openImportIfAuthorised = () => {
-    if (!canAddPart) {
-      showErrorDialog(
-        "Access Denied",
-        "You don't have permission to add parts. Ask an administrator to grant you store access."
-      );
+    if (!canImport) {
+      showErrorDialog("Access Denied", "Only superadmins can import parts from Excel.");
       return;
     }
     setImportState({ ...EMPTY_IMPORT, open: true });
@@ -677,6 +676,7 @@ export const useStorePage = () => {
   }, [importState.rows, skipDuplicates]);
 
   const confirmImport = async () => {
+    if (!canImport) return;
     const entries = importState.rows
       .filter((r) => !r.errors.length && !(skipDuplicates && r.duplicate))
       .map(({ data }) => ({
@@ -826,6 +826,7 @@ export const useStorePage = () => {
 
     // permissions
     canAddPart,
+    canImport,
     canAdjustQuantity,
     canDelete,
     canExport,

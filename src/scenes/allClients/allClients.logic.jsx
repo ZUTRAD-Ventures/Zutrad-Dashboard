@@ -20,11 +20,11 @@ export const isMaintenanceDue = (dateStr) => {
 };
 
 export const exportClientsCSV = (clients) => {
-  const headers = ["Client ID", "Company", "Address", "Total Machines", "Serial", "Machine", "Line", "Last Maintenance", "Usage Status"];
+  const headers = ["Client ID", "Company", "Address", "Total Machines", "Serial", "Machine", "Line", "Last Maintenance"];
   const rows = clients.flatMap((c) =>
     c.machines.length > 0
-      ? c.machines.map((m) => [c.id, c.companyName, c.address, c.machines.length, m.serialNumber, m.machine, m.lineInstalled, m.lastMaintenanceDate, m.usageStatus])
-      : [[c.id, c.companyName, c.address, 0, "", "", "", "", ""]]
+      ? c.machines.map((m) => [c.id, c.companyName, c.address, c.machines.length, m.serialNumber, m.machine, m.lineInstalled, m.lastMaintenanceDate])
+      : [[c.id, c.companyName, c.address, 0, "", "", "", ""]]
   );
   const content = [headers, ...rows].map((r) => r.map((v) => `"${v ?? ""}"`).join(",")).join("\n");
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });

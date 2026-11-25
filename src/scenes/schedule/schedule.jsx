@@ -77,7 +77,7 @@ const SchedulePage = () => {
     handleChange, handleSubmit, handleCancelForm,
     importState, importParsing, importing, importProgress, importSummary,
     skipDuplicates, setSkipDuplicates,
-    openImport, closeImport, handleImportFile, confirmImport, handleDownloadTemplate,
+    canImport, openImport, closeImport, handleImportFile, confirmImport, handleDownloadTemplate,
     handleComplete, completingId,
     confirmDialog, closeConfirmDialog, submitConfirmDialog,
     toast, closeToast, errorDialog, closeErrorDialog,
@@ -224,6 +224,7 @@ const SchedulePage = () => {
           <Typography color={colors.grey[500]} fontSize="12px" sx={{ whiteSpace: "nowrap" }}>
             {filtered.length} / {visible.length}
           </Typography>
+          {canImport && (
           <Button
             size="small" variant="outlined" startIcon={<UploadFileOutlinedIcon />}
             onClick={openImport}
@@ -235,6 +236,7 @@ const SchedulePage = () => {
           >
             Import Excel
           </Button>
+          )}
         </Stack>
       </Box>
 

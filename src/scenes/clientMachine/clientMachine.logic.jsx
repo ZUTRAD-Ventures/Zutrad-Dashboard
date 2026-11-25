@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { formatDate as formatDateUtil } from "../../utils/dateFormat";
 import { getCurrentUser, getToken, isAdminOrSuper, isSuperAdmin, hasPermission } from "../../utils/auth";
+import { parseMachineFile, downloadMachineTemplate } from "./clientMachine.excel";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
@@ -8,17 +9,14 @@ const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
 // CONSTANTS
 // ════════════════════════════════════════════════════════════════════════════
 export const MACHINE_TYPES = ["Macsa ID", "Savema", "Sojet", "BestCode"];
-export const USAGE_STATUS  = ["main", "spare", "not in use"];
+
+// Rows per request when bulk-importing, so a 5,000-row file doesn't become one
+// giant request body (the backend accepts at most 500 per request).
+const IMPORT_CHUNK = 500;
 
 // ════════════════════════════════════════════════════════════════════════════
 // PURE HELPERS
 // ════════════════════════════════════════════════════════════════════════════
-export const statusColor = (status, colors) => {
-  if (status === "main")  return { bg: colors.greenAccent[700], text: colors.greenAccent[300] };
-  if (status === "spare") return { bg: colors.blueAccent[700],  text: colors.blueAccent[200]  };
-  return { bg: colors.grey[700], text: colors.grey[300] };
-};
-
 export const isMaintenanceDue = (dateStr, cycleMonths) => {
   if (!dateStr || !cycleMonths) return false;
   const dueDate = new Date(dateStr);
@@ -32,10 +30,10 @@ export const formatDate = (str) => {
 };
 
 export const exportCSV = (allMachines) => {
-  const headers = ["Serial", "Machine Type", "Client", "Line", "Installed", "Cycle (mo)", "Last Maintenance", "Status"];
+  const headers = ["Serial", "Machine Type", "Client", "Line", "Installed", "Cycle (mo)", "Last Maintenance"];
   const rows = allMachines.map((m) => [
     m.serialNumber, m.machine, m.clientName, m.lineInstalled,
-    m.installedDate, m.maintenanceCycle, m.lastMaintenanceDate, m.usageStatus,
+    m.installedDate, m.maintenanceCycle, m.lastMaintenanceDate,
   ]);
   const content = [headers, ...rows].map((r) => r.map((v) => `"${v ?? ""}"`).join(",")).join("\n");
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
@@ -82,7 +80,6 @@ export const useMachineCardLogic = (machine, clientId, onSave) => {
   const [isEditing,   setIsEditing]   = useState(false);
   const [editValues,  setEditValues]  = useState({
     lastMaintenanceDate: machine.lastMaintenanceDate,
-    usageStatus:         machine.usageStatus,
   });
 
   const handleSave = () => {
@@ -121,6 +118,8 @@ export const useClientMachinesLogic = () => {
   const userCanEditMachine     = isAdminOrSuper() || hasPermission("store");
   // Delete machine: superadmin only
   const userCanDeleteMachine   = isSuperAdmin();
+  // Import Excel: superadmin only
+  const userCanImportMachines = isSuperAdmin();
   // Export CSV: admin or superadmin only
   const userCanExportCSV       = isAdminOrSuper();
 
@@ -130,7 +129,6 @@ export const useClientMachinesLogic = () => {
   const [error,        setError]        = useState(null);
   const [formOpen,     setFormOpen]     = useState(false);
   const [search,       setSearch]       = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
   const [clientFilter, setClientFilter] = useState("all");
   const [viewMode,     setViewMode]     = useState("cards"); // "cards" | "table"
   const [toast,        setToast]        = useState({ open: false, message: "", severity: "success" });
@@ -138,7 +136,7 @@ export const useClientMachinesLogic = () => {
 
   const [form, setForm] = useState({
     serialNumber: "", clientId: "", lineInstalled: "", machine: "",
-    installedDate: "", maintenanceCycle: "", usageStatus: "main",
+    installedDate: "", maintenanceCycle: "",
   });
 
   const showToast = (message, severity = "success") =>
@@ -201,13 +199,12 @@ export const useClientMachinesLogic = () => {
             m.serialNumber.toLowerCase().includes(q) ||
             m.machine.toLowerCase().includes(q) ||
             c.companyName.toLowerCase().includes(q);
-          const matchStatus = statusFilter === "all" || m.usageStatus === statusFilter;
           const matchClient = clientFilter === "all" || String(c.id) === clientFilter;
-          return matchSearch && matchStatus && matchClient;
+          return matchSearch && matchClient;
         }),
       }))
       .filter((c) => c.machines.length > 0),
-    [clients, search, statusFilter, clientFilter]
+    [clients, search, clientFilter]
   );
 
   const filteredFlat = useMemo(() =>
@@ -224,7 +221,7 @@ export const useClientMachinesLogic = () => {
   const resetForm = () => {
     setForm({
       serialNumber: "", clientId: "", lineInstalled: "", machine: "",
-      installedDate: "", maintenanceCycle: "", usageStatus: "main",
+      installedDate: "", maintenanceCycle: "",
     });
     setFormError("");
   };
@@ -266,7 +263,6 @@ export const useClientMachinesLogic = () => {
       installedDate,
       maintenanceCycle:    Number(maintenanceCycle),
       lastMaintenanceDate: installedDate,
-      usageStatus:         form.usageStatus,
     };
 
     try {
@@ -342,6 +338,128 @@ export const useClientMachinesLogic = () => {
     showToast(`Copied: ${serial}`);
   };
 
+  // ── excel import — superadmin only ────────────────────────────────────────
+  // Flow: pick file → parse + validate in the browser → preview dialog →
+  // confirm → POST valid rows to /clients/machines/bulk in chunks of 500.
+  const EMPTY_IMPORT = { open: false, fileName: "", rows: [], missingColumns: [], error: "" };
+  const [importState,    setImportState]    = useState(EMPTY_IMPORT);
+  const [importParsing,  setImportParsing]  = useState(false);
+  const [importing,      setImporting]      = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
+
+  const openImportIfAuthorised = () => {
+    if (!userCanImportMachines) {
+      showErrorDialog("Access Denied", "Only superadmins can import machines from Excel.");
+      return;
+    }
+    setImportState({ ...EMPTY_IMPORT, open: true });
+  };
+
+  const closeImport = () => {
+    if (importing) return; // don't close mid-upload
+    setImportState(EMPTY_IMPORT);
+    setImportProgress(0);
+  };
+
+  // Client currently picked in the "Client" filter (used when the file has no Client column)
+  const filterClientName = clientFilter === "all"
+    ? ""
+    : clients.find((c) => String(c.id) === clientFilter)?.companyName ?? "";
+
+  const handleImportFile = async (file) => {
+    if (!file) return;
+    setImportParsing(true);
+    setImportState({ ...EMPTY_IMPORT, open: true, fileName: file.name });
+    try {
+      const { rows, missingColumns } = await parseMachineFile(file, {
+        machineTypes:  MACHINE_TYPES,
+        clients:       clients.map((c) => ({ id: c.id, companyName: c.companyName })),
+        existing:      allMachines,
+        defaultClientName: filterClientName,
+      });
+      setImportState({ open: true, fileName: file.name, rows, missingColumns, error: "" });
+    } catch (err) {
+      setImportState({ ...EMPTY_IMPORT, open: true, fileName: file.name, error: err.message });
+    } finally {
+      setImportParsing(false);
+    }
+  };
+
+  const importSummary = useMemo(() => {
+    const total      = importState.rows.length;
+    const invalid    = importState.rows.filter((r) => r.errors.length).length;
+    const duplicates = importState.rows.filter((r) => !r.errors.length && r.duplicate).length;
+    const toImport   = importState.rows.filter(
+      (r) => !r.errors.length && !(skipDuplicates && r.duplicate)
+    ).length;
+    return { total, invalid, duplicates, toImport };
+  }, [importState.rows, skipDuplicates]);
+
+  const confirmImport = async () => {
+    if (!userCanImportMachines) return;
+    const entries = importState.rows
+      .filter((r) => !r.errors.length && !(skipDuplicates && r.duplicate))
+      .map(({ data }) => ({
+        serialNumber:        data.serialNumber,
+        client:              data.clientId,
+        machine:             data.machine,
+        lineInstalled:       data.lineInstalled,
+        installedDate:       data.installedDate,
+        maintenanceCycle:    data.maintenanceCycle,
+        lastMaintenanceDate: data.lastMaintenanceDate,
+      }));
+    if (entries.length === 0) return;
+
+    setImporting(true);
+    setImportProgress(0);
+    let createdCount = 0;
+    const updatedById = new Map();
+    const applyUpdates = () => {
+      if (!updatedById.size) return;
+      setClients((prev) => prev.map((c) => updatedById.get(c.id) ?? c));
+    };
+
+    try {
+      for (let i = 0; i < entries.length; i += IMPORT_CHUNK) {
+        const chunk = entries.slice(i, i + IMPORT_CHUNK);
+        const data = await apiFetch("/clients/machines/bulk", {
+          method: "POST",
+          body:   JSON.stringify({ items: chunk }),
+        });
+        (data.clients || []).map(normalizeClient).forEach((c) => updatedById.set(c.id, c));
+        createdCount += data.created ?? chunk.length;
+        setImportProgress(Math.round(((i + chunk.length) / entries.length) * 100));
+      }
+      applyUpdates();
+      setImportState(EMPTY_IMPORT);
+      showToast(`${createdCount} machine${createdCount === 1 ? "" : "s"} imported.`);
+    } catch (err) {
+      // Earlier chunks may already be saved — show them and say so.
+      applyUpdates();
+      setImportState(EMPTY_IMPORT);
+      showErrorDialog(
+        "Import stopped",
+        `${err.message}${createdCount ? ` ${createdCount} of ${entries.length} machines were saved before the error. Re-importing the same file will skip those (duplicates are detected).` : " Nothing was saved."}`
+      );
+      if (createdCount) fetchClients();
+    } finally {
+      setImporting(false);
+      setImportProgress(0);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      await downloadMachineTemplate({
+        machineTypes:  MACHINE_TYPES,
+        clientNames:   clients.map((c) => c.companyName),
+      });
+    } catch {
+      showErrorDialog("Template failed", 'Could not create the template. Make sure "xlsx" is installed (npm install xlsx).');
+    }
+  };
+
   // ── export — admin / superadmin only ──────────────────────────────────────
   const handleExportCSV = () => {
     if (!userCanExportCSV) {
@@ -357,7 +475,6 @@ export const useClientMachinesLogic = () => {
 
   const clearFilters = () => {
     setSearch("");
-    setStatusFilter("all");
     setClientFilter("all");
   };
 
@@ -379,12 +496,11 @@ export const useClientMachinesLogic = () => {
     userCanEditMachine,
     userCanDeleteMachine,
     userCanExportCSV,
+    userCanImportMachines,
 
     // search / filters / view
     search,
     setSearch,
-    statusFilter,
-    setStatusFilter,
     clientFilter,
     setClientFilter,
     viewMode,
@@ -415,6 +531,21 @@ export const useClientMachinesLogic = () => {
     handleSave,
     handleCopySerial,
     handleExportCSV,
+
+    // excel import
+    importState,
+    importParsing,
+    importing,
+    importProgress,
+    importSummary,
+    skipDuplicates,
+    setSkipDuplicates,
+    filterClientName,
+    openImportIfAuthorised,
+    closeImport,
+    handleImportFile,
+    confirmImport,
+    handleDownloadTemplate,
 
     // toast
     toast,
