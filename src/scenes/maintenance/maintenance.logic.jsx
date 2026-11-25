@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { notifyMaintenanceChanged } from "../../utils/eventbus";
 
-const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
 /* =========================================================================
    CONSTANTS

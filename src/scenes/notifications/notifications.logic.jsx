@@ -131,7 +131,7 @@ const buildReportNotifications = (notifications, reports = [], dateFormat) => {
         id: `report-${recordId}`,
         type: "report",
         title: "Report Pending Approval",
-        message: `${report.reportDetails ?? ""} (${report.client?.companyName ?? "Unknown client"})`,
+        message: `${report.reportDetails} (${report.client.companyName})`,
         time: getTimeAgo(report.createdAt, dateFormat),
         read: false,
         createdAt: report.createdAt,
@@ -141,7 +141,7 @@ const buildReportNotifications = (notifications, reports = [], dateFormat) => {
         id: `report-${recordId}`,
         type: "report",
         title: "Report Approved",
-        message: `Report approved: ${(report.reportDetails ?? "").substring(0, 60)}... (${report.client?.companyName ?? "Unknown client"})`,
+        message: `Report approved: ${report.reportDetails.substring(0, 60)}... (${report.client.companyName})`,
         time: getTimeAgo(report.createdAt, dateFormat),
         read: true,
         createdAt: report.createdAt,
@@ -151,7 +151,7 @@ const buildReportNotifications = (notifications, reports = [], dateFormat) => {
         id: `report-${recordId}`,
         type: "report",
         title: "Report Rejected",
-        message: `Report rejected: ${(report.reportDetails ?? "").substring(0, 60)}... (${report.client?.companyName ?? "Unknown client"})`,
+        message: `Report rejected: ${report.reportDetails.substring(0, 60)}... (${report.client.companyName})`,
         time: getTimeAgo(report.createdAt, dateFormat),
         read: true,
         createdAt: report.createdAt,
@@ -172,7 +172,7 @@ const buildMaintenanceNotifications = (notifications, maintenances = [], dateFor
         id: `maintenance-${recordId}`,
         type: "maintenance",
         title: "Maintenance Completed",
-        message: `${maint.message} on ${maint.machine} at ${maint.client?.companyName ?? "Unknown client"}`,
+        message: `${maint.message} on ${maint.machine} at ${maint.client.companyName}`,
         time: getTimeAgo(maint.createdAt, dateFormat),
         read: true,
         createdAt: maint.createdAt,
@@ -182,7 +182,7 @@ const buildMaintenanceNotifications = (notifications, maintenances = [], dateFor
         id: `maintenance-${recordId}`,
         type: "maintenance",
         title: daysUntil <= 3 ? "Upcoming Maintenance (Soon)" : "Upcoming Maintenance",
-        message: `${maint.message} scheduled for ${maint.maintenanceDay} at ${maint.machine} (${maint.client?.companyName ?? "Unknown client"})`,
+        message: `${maint.message} scheduled for ${maint.maintenanceDay} at ${maint.machine} (${maint.client.companyName})`,
         time: getTimeAgo(maint.createdAt, dateFormat),
         read: false,
         createdAt: maint.createdAt,
@@ -198,7 +198,7 @@ const buildSupplyNotifications = (notifications, supplies = [], dateFormat) => {
       id: `supply-${recordId}`,
       type: "supply",
       title: "Supply Log Created",
-      message: `${supply.quantity}x ${supply.goodsSupplied} supplied to ${supply.client?.companyName ?? "Unknown client"} by ${supply.user ? `${supply.user.firstName} ${supply.user.surname}` : "unknown user"}`,
+      message: `${supply.quantity}x ${supply.goodsSupplied} supplied to ${supply.client.companyName} by ${supply.user.firstName} ${supply.user.surname}`,
       time: getTimeAgo(supply.createdAt, dateFormat),
       read: false,
       createdAt: supply.createdAt,
@@ -283,28 +283,16 @@ const fetchNotificationSources = async () => {
     fetch(`${API_BASE}/maintenance`, { headers: authHeaders() }),
     fetch(`${API_BASE}/supply`, { headers: authHeaders() }),
     fetch(`${API_BASE}/store`, { headers: authHeaders() }),
-    fetch(`${API_BASE}/auth/pending`, { headers: authHeaders() }),
+    fetch(`${API_BASE}/users/signup-requests`, { headers: authHeaders() }),
   ]);
 
-  const [reports, maintenances, supplies, storeItems, signupsRaw] = await Promise.all([
+  const [reports, maintenances, supplies, storeItems, signups] = await Promise.all([
     reportsRes.ok ? reportsRes.json() : [],
     maintenanceRes.ok ? maintenanceRes.json() : [],
     supplyRes.ok ? supplyRes.json() : [],
     storeRes.ok ? storeRes.json() : [],
     signupsRes.ok ? signupsRes.json() : [],
   ]);
-
-  // GET /auth/pending returns raw user documents and is admin-only (other
-  // roles get a 403, which becomes [] above). Map them to the shape
-  // buildSignupNotifications expects, same as management.logic.jsx does.
-  const signups = (Array.isArray(signupsRaw) ? signupsRaw : []).map((u) => ({
-    id:            u._id,
-    firstName:     u.firstName,
-    surname:       u.surname,
-    email:         u.email,
-    requestedRole: u.role,
-    requestedAt:   u.createdAt,
-  }));
 
   return { reports, maintenances, supplies, storeItems, signups };
 };
