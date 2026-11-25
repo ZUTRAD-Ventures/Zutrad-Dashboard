@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { getToken, isAdminOrSuper } from "../../utils/auth";
+import { getToken, isAdminOrSuper, isSuperAdmin } from "../../utils/auth";
 import { parseScheduleFile, downloadScheduleTemplate } from "./schedule.excel";
 
 const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
@@ -261,6 +261,7 @@ export const useSchedulePage = () => {
   // protectAdmin (App.js). The REAL enforcement must be the role guard on the
   // backend /schedules routes (see guide §2/§3).
   const canManage = isAdminOrSuper();
+  const canImport = isSuperAdmin(); // Excel import: superadmin only
 
   const [schedules, setSchedules] = useState([]);
   const [assignees, setAssignees] = useState([]);
@@ -395,7 +396,7 @@ export const useSchedulePage = () => {
   const [skipDuplicates, setSkipDuplicates] = useState(true);
 
   const openImport = () => {
-    if (!canManage) { denyAccess("import schedules"); return; }
+    if (!canImport) { denyAccess("import schedules"); return; }
     setImportState({ ...EMPTY_IMPORT, open: true });
   };
 
@@ -523,7 +524,7 @@ export const useSchedulePage = () => {
     // excel import
     importState, importParsing, importing, importProgress, importSummary,
     skipDuplicates, setSkipDuplicates,
-    openImport, closeImport, handleImportFile, confirmImport, handleDownloadTemplate,
+    canImport, openImport, closeImport, handleImportFile, confirmImport, handleDownloadTemplate,
     // completion
     handleComplete, completingId,
     confirmDialog, closeConfirmDialog, submitConfirmDialog,
