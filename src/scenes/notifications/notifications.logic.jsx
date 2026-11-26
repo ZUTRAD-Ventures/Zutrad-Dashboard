@@ -283,7 +283,7 @@ const fetchNotificationSources = async () => {
     fetch(`${API_BASE}/maintenance`, { headers: authHeaders() }),
     fetch(`${API_BASE}/supply`, { headers: authHeaders() }),
     fetch(`${API_BASE}/store`, { headers: authHeaders() }),
-    fetch(`${API_BASE}/users/signup-requests`, { headers: authHeaders() }),
+    fetch(`${API_BASE}/auth/pending`, { headers: authHeaders() }),
   ]);
 
   const [reports, maintenances, supplies, storeItems, signups] = await Promise.all([
