@@ -6,24 +6,13 @@ import {
   Snackbar,
   Alert,
   Stack,
-  Divider,
   Chip,
-  IconButton,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  Table,
-  TableHead,
-  TableRow,
-  TableCell,
-  TableBody,
-  Select,
-  FormControl,
-  InputLabel,
   MenuItem,
   TextField,
-  LinearProgress,
 } from "@mui/material";
 import { tokens } from "../../theme";
 import Header from "../../components/Header";
@@ -33,8 +22,6 @@ import AdminPanelSettingsOutlinedIcon from "@mui/icons-material/AdminPanelSettin
 import UploadFileOutlinedIcon from "@mui/icons-material/UploadFileOutlined";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import CancelOutlinedIcon from "@mui/icons-material/CancelOutlined";
-import WarningAmberOutlinedIcon from "@mui/icons-material/WarningAmberOutlined";
-import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import EngineeringOutlinedIcon from "@mui/icons-material/EngineeringOutlined";
 import GroupOutlinedIcon from "@mui/icons-material/GroupOutlined";
@@ -46,7 +33,8 @@ import ShieldOutlinedIcon from "@mui/icons-material/ShieldOutlined";
 import KeyboardDoubleArrowUpOutlinedIcon from "@mui/icons-material/KeyboardDoubleArrowUpOutlined";
 import KeyboardDoubleArrowDownOutlinedIcon from "@mui/icons-material/KeyboardDoubleArrowDownOutlined";
 import VerifiedUserOutlinedIcon from "@mui/icons-material/VerifiedUserOutlined";
-import { CLIENT_DB_FIELDS, fieldLabel, useImportDialog, useSuperAdminPage } from "../global/management.logic";
+import { useSuperAdminPage } from "../global/management.logic";
+import ClientImportDialog from "../global/clientImportDialog";
 import { useDateFormat } from "../settings/dateFormat.logic";
 
 /* =========================================================================
@@ -69,222 +57,6 @@ const StatCard = ({ icon, label, value, accent, colors }) => (
     </Box>
   </Box>
 );
-
-/* =========================================================================
-   IMPORT DIALOG — upload → map → preview → done wizard.
-   All step logic lives in useImportDialog; this renders each step.
-   ========================================================================= */
-
-const ImportDialog = ({ open, onClose, onImport, dbFields, entityLabel, colors }) => {
-  const {
-    fileRef,
-    step,
-    fileData,
-    mapping,
-    results,
-    loading,
-    mappingComplete,
-    reset,
-    handleFile,
-    handleDrop,
-    setFieldMapping,
-    goToUpload,
-    goToMap,
-    goToPreview,
-    handleImport,
-  } = useImportDialog({ onImport, dbFields });
-
-  const handleClose = () => { reset(); onClose(); };
-
-  return (
-    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth
-      PaperProps={{ sx: { backgroundColor: colors.primary[400], borderRadius: "8px" } }}>
-      <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <Typography fontWeight={700} color={colors.grey[100]} fontSize="15px">
-          Import {entityLabel}s
-        </Typography>
-        <IconButton size="small" onClick={handleClose} sx={{ color: colors.grey[400] }}>
-          <CloseOutlinedIcon />
-        </IconButton>
-      </DialogTitle>
-
-      <Divider sx={{ borderColor: colors.primary[300] }} />
-
-      <DialogContent sx={{ pt: "20px" }}>
-        {step === "upload" && (
-          <Box
-            onDrop={handleDrop}
-            onDragOver={(e) => e.preventDefault()}
-            display="flex" flexDirection="column" alignItems="center" justifyContent="center"
-            gap="12px" py="48px"
-            border={`2px dashed ${colors.grey[600]}`}
-            borderRadius="8px"
-            sx={{ cursor: "pointer", "&:hover": { borderColor: colors.greenAccent[500], backgroundColor: `${colors.greenAccent[900]}22` } }}
-            onClick={() => fileRef.current?.click()}
-          >
-            <UploadFileOutlinedIcon sx={{ fontSize: 44, color: colors.grey[500] }} />
-            <Typography color={colors.grey[300]} fontWeight={600}>
-              Drop a CSV or JSON file here, or click to browse
-            </Typography>
-            <Typography color={colors.grey[500]} fontSize="12px">
-              Supports .csv and .json
-            </Typography>
-            <input ref={fileRef} type="file" accept=".csv,.json" hidden onChange={handleFile} />
-          </Box>
-        )}
-
-        {step === "map" && (
-          <Box>
-            <Alert severity="info" sx={{ mb: "16px", fontSize: "12px" }}>
-              {fileData.rows.length} rows detected. Map each database field to the matching column from your file. Fields highlighted in green were auto-matched.
-            </Alert>
-            <Box display="grid" gridTemplateColumns="1fr 1fr" gap="14px">
-              {dbFields.map((field) => (
-                <Box key={field} display="flex" alignItems="center" gap="10px">
-                  <Box
-                    px="10px" py="6px" borderRadius="4px"
-                    backgroundColor={mapping[field] ? `${colors.greenAccent[800]}` : colors.primary[300]}
-                    border={`1px solid ${mapping[field] ? colors.greenAccent[600] : colors.grey[600]}`}
-                    minWidth="130px"
-                  >
-                    <Typography fontSize="12px" color={mapping[field] ? colors.greenAccent[300] : colors.grey[400]} fontWeight={600}>
-                      {fieldLabel(field)}
-                      <Typography component="span" color={colors.redAccent[400]} ml="2px">*</Typography>
-                    </Typography>
-                  </Box>
-                  <Typography color={colors.grey[500]} fontSize="13px">→</Typography>
-                  <FormControl size="small" fullWidth variant="outlined">
-                    <InputLabel sx={{ fontSize: "12px" }}>File column</InputLabel>
-                    <Select
-                      value={mapping[field] || ""}
-                      label="File column"
-                      onChange={(e) => setFieldMapping(field, e.target.value)}
-                      sx={{ backgroundColor: colors.primary[300], fontSize: "12px" }}
-                    >
-                      <MenuItem value=""><em>— not mapped —</em></MenuItem>
-                      {fileData.headers.map((h) => (
-                        <MenuItem key={h} value={h}>{h}</MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Box>
-              ))}
-            </Box>
-            {!mappingComplete && (
-              <Typography color={colors.redAccent[300]} fontSize="12px" mt="12px">
-                All fields must be mapped before continuing.
-              </Typography>
-            )}
-          </Box>
-        )}
-
-        {step === "preview" && (
-          <Box>
-            <Alert severity="info" sx={{ mb: "12px", fontSize: "12px" }}>
-              Preview of first 5 rows. {fileData.rows.length} total rows will be processed.
-            </Alert>
-            <Box sx={{ overflowX: "auto" }}>
-              <Table size="small">
-                <TableHead>
-                  <TableRow sx={{ backgroundColor: colors.blueAccent[700] }}>
-                    {dbFields.map((f) => (
-                      <TableCell key={f} sx={{ color: colors.grey[200], fontSize: "12px", fontWeight: 700, border: "none" }}>
-                        {fieldLabel(f)}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {fileData.rows.slice(0, 5).map((row, i) => {
-                    const missing = dbFields.some((f) => !row[mapping[f]]?.trim());
-                    return (
-                      <TableRow key={i} sx={{ backgroundColor: missing ? `${colors.redAccent[900]}55` : colors.primary[400] }}>
-                        {dbFields.map((f) => (
-                          <TableCell key={f} sx={{ color: row[mapping[f]] ? colors.grey[200] : colors.redAccent[400], fontSize: "12px", border: "none" }}>
-                            {row[mapping[f]] || <em>missing</em>}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </Box>
-            {fileData.rows.length > 5 && (
-              <Typography color={colors.grey[500]} fontSize="12px" mt="8px">
-                + {fileData.rows.length - 5} more rows not shown
-              </Typography>
-            )}
-          </Box>
-        )}
-
-        {step === "done" && (
-          <Box>
-            {loading && <LinearProgress color="secondary" sx={{ mb: "16px" }} />}
-            <Stack spacing={1.5}>
-              <Box display="flex" alignItems="center" gap="10px" p="12px 16px"
-                backgroundColor={`${colors.greenAccent[800]}55`} borderRadius="6px"
-                borderLeft={`3px solid ${colors.greenAccent[500]}`}>
-                <CheckCircleOutlineIcon sx={{ color: colors.greenAccent[400] }} />
-                <Typography color={colors.greenAccent[300]} fontWeight={600}>
-                  {results.imported.length} {entityLabel}(s) imported successfully
-                </Typography>
-              </Box>
-              {results.skipped.length > 0 && (
-                <Box p="12px 16px" backgroundColor={`${colors.redAccent[900]}55`} borderRadius="6px"
-                  borderLeft={`3px solid ${colors.redAccent[500]}`}>
-                  <Box display="flex" alignItems="center" gap="10px" mb="8px">
-                    <WarningAmberOutlinedIcon sx={{ color: colors.redAccent[400] }} />
-                    <Typography color={colors.redAccent[300]} fontWeight={600}>
-                      {results.skipped.length} row(s) skipped — missing required fields
-                    </Typography>
-                  </Box>
-                  {results.skipped.map((s) => (
-                    <Typography key={s.row} color={colors.redAccent[200]} fontSize="12px">
-                      Row {s.row}: {Object.entries(s.data).map(([k, v]) => `${k}=${v || "empty"}`).join(", ")}
-                    </Typography>
-                  ))}
-                </Box>
-              )}
-            </Stack>
-          </Box>
-        )}
-      </DialogContent>
-
-      <Divider sx={{ borderColor: colors.primary[300] }} />
-
-      <DialogActions sx={{ px: "24px", py: "14px", gap: "8px" }}>
-        {step === "upload" && (
-          <Button onClick={handleClose} size="small" sx={{ color: colors.grey[400], textTransform: "none" }}>Cancel</Button>
-        )}
-        {step === "map" && (
-          <>
-            <Button onClick={goToUpload} size="small" sx={{ color: colors.grey[400], textTransform: "none" }}>Back</Button>
-            <Button variant="contained" color="secondary" size="small" disabled={!mappingComplete}
-              onClick={goToPreview} sx={{ textTransform: "none" }}>
-              Preview →
-            </Button>
-          </>
-        )}
-        {step === "preview" && (
-          <>
-            <Button onClick={goToMap} size="small" sx={{ color: colors.grey[400], textTransform: "none" }}>Back</Button>
-            <Button variant="contained" color="secondary" size="small"
-              onClick={handleImport} sx={{ textTransform: "none" }}>
-              Import {fileData.rows.length} Rows
-            </Button>
-          </>
-        )}
-        {step === "done" && (
-          <>
-            <Button onClick={reset} size="small" sx={{ color: colors.grey[400], textTransform: "none" }}>Import Another</Button>
-            <Button variant="contained" color="secondary" size="small" onClick={handleClose} sx={{ textTransform: "none" }}>Done</Button>
-          </>
-        )}
-      </DialogActions>
-    </Dialog>
-  );
-};
 
 /* =========================================================================
    SECTION WRAPPER + TITLE — shared layout for each page section
@@ -995,7 +767,7 @@ const SuperAdminPage = () => {
                 "&:hover": { borderColor: colors.blueAccent[300], backgroundColor: colors.blueAccent[900] },
               }}
             >
-              Import CSV / JSON
+              Import Excel / CSV
             </Button>
           }
         />
@@ -1050,12 +822,10 @@ const SuperAdminPage = () => {
       </SectionBox>
 
       {/* import dialog — clients only */}
-      <ImportDialog
+      <ClientImportDialog
         open={clientImportOpen}
         onClose={closeClientImport}
-        onImport={handleClientImport}
-        dbFields={CLIENT_DB_FIELDS}
-        entityLabel="Client"
+        onImported={handleClientImport}
         colors={colors}
       />
 

@@ -1,6 +1,7 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
+import { parseClientFile, downloadClientTemplate, clientNameKey } from "./management.excel";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
 
 /* =========================================================================
    AUTH HELPER
@@ -63,127 +64,122 @@ export const PROMOTABLE_ROLES = ["administrator", "superadmin"];
 // in useSuperAdminPage, which excludes only "superadmin").
 export const FULL_ACCESS_ROLES = ["administrator", "superadmin"];
 
-export const CLIENT_DB_FIELDS = ["companyName", "address"];
-
 /* =========================================================================
-   CSV / JSON PARSING HELPERS
+   CLIENT IMPORT HOOK  (shared by the Admin and Super Admin pages)
+   =========================================================================
+   Same flow as the Store import: pick file → parse + validate in the browser
+   → preview → confirm → POST valid rows to /clients/bulk in chunks.
+   Rows whose company name already exists (or repeats inside the file) are
+   flagged and skipped, because the server rejects duplicate names.
    ========================================================================= */
 
-export const parseCSV = (text) => {
-  const lines = text.trim().split("\n").filter(Boolean);
-  if (lines.length < 2) return { headers: [], rows: [] };
-  const headers = lines[0].split(",").map((h) => h.replace(/^"|"$/g, "").trim());
-  const rows = lines.slice(1).map((line) => {
-    const vals = line.match(/(".*?"|[^,]+|(?<=,)(?=,)|(?<=,)$|^(?=,))/g) || [];
-    const obj = {};
-    headers.forEach((h, i) => {
-      obj[h] = (vals[i] || "").replace(/^"|"$/g, "").trim();
-    });
-    return obj;
-  });
-  return { headers, rows };
-};
+// Rows per request, so a 5,000-row file doesn't become one giant request body.
+const IMPORT_CHUNK = 500;
+const EMPTY_IMPORT = { fileName: "", rows: [], missingColumns: [], error: "" };
 
-export const parseJSON = (text) => {
-  try {
-    const parsed = JSON.parse(text);
-    const arr = Array.isArray(parsed) ? parsed : [parsed];
-    const headers = arr.length > 0 ? Object.keys(arr[0]) : [];
-    return { headers, rows: arr };
-  } catch {
-    return { headers: [], rows: [] };
-  }
-};
+export const useImportDialog = ({ onImported } = {}) => {
+  const [importState, setImportState]       = useState(EMPTY_IMPORT);
+  const [importParsing, setImportParsing]   = useState(false);
+  const [importing, setImporting]           = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
+  const [importError, setImportError]       = useState("");
 
-export const fieldLabel = (f) =>
-  f.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
+  const resetImport = useCallback(() => {
+    setImportState(EMPTY_IMPORT);
+    setImportProgress(0);
+    setImportError("");
+  }, []);
 
-/* =========================================================================
-   IMPORT DIALOG HOOK  (shared verbatim by both pages)
-   ========================================================================= */
-
-export const useImportDialog = ({ onImport, dbFields }) => {
-  const fileRef = useRef(null);
-  const [step, setStep] = useState("upload");
-  const [fileData, setFileData] = useState({ headers: [], rows: [] });
-  const [mapping, setMapping] = useState({});
-  const [results, setResults] = useState({ imported: [], skipped: [] });
-  const [loading, setLoading] = useState(false);
-
-  const reset = () => {
-    setStep("upload");
-    setFileData({ headers: [], rows: [] });
-    setMapping({});
-    setResults({ imported: [], skipped: [] });
-  };
-
-  const handleFile = (e) => {
-    const file = e.target.files?.[0];
+  const handleImportFile = async (file) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target.result;
-      const parsed = file.name.endsWith(".json") ? parseJSON(text) : parseCSV(text);
-      if (parsed.rows.length === 0) return;
-      const autoMap = {};
-      dbFields.forEach((field) => {
-        const match = parsed.headers.find(
-          (h) => h.toLowerCase().replace(/[\s_-]/g, "") === field.toLowerCase()
-        );
-        if (match) autoMap[field] = match;
-      });
-      setFileData(parsed);
-      setMapping(autoMap);
-      setStep("map");
-    };
-    reader.readAsText(file);
-    e.target.value = "";
+    setImportParsing(true);
+    setImportError("");
+    setImportState({ ...EMPTY_IMPORT, fileName: file.name });
+    try {
+      // fetch current clients so duplicates are flagged before uploading
+      const res = await fetch(`${API_BASE}/clients`, { headers: authHeaders() });
+      if (!res.ok) throw new Error("Could not load existing clients to check for duplicates. Try again.");
+      const existing = await res.json();
+      const { rows, missingColumns } = await parseClientFile(
+        file,
+        existing.map((c) => c.companyName)
+      );
+      setImportState({ fileName: file.name, rows, missingColumns, error: "" });
+    } catch (err) {
+      setImportState({ ...EMPTY_IMPORT, fileName: file.name, error: err.message });
+    } finally {
+      setImportParsing(false);
+    }
   };
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    const fakeEvent = { target: { files: [file], value: "" }, preventDefault: () => {} };
-    handleFile(fakeEvent);
-  };
+  const importSummary = useMemo(() => {
+    const total      = importState.rows.length;
+    const invalid    = importState.rows.filter((r) => r.errors.length).length;
+    const duplicates = importState.rows.filter((r) => !r.errors.length && r.duplicate).length;
+    const toImport   = total - invalid - duplicates;
+    return { total, invalid, duplicates, toImport };
+  }, [importState.rows]);
 
-  const setFieldMapping = (field, value) =>
-    setMapping((m) => ({ ...m, [field]: value }));
+  // Resolves true when everything was saved (the dialog then closes itself).
+  const confirmImport = async () => {
+    const entries = importState.rows
+      .filter((r) => !r.errors.length && !r.duplicate)
+      .map(({ data }) => ({ companyName: data.companyName, address: data.address }));
+    if (entries.length === 0) return false;
 
-  const mappingComplete = dbFields.every((f) => mapping[f]);
-
-  const goToUpload  = () => setStep("upload");
-  const goToMap     = () => setStep("map");
-  const goToPreview = () => setStep("preview");
-
-  const handleImport = () => {
-    setLoading(true);
-    setTimeout(() => {
-      const imported = [];
-      const skipped  = [];
-      fileData.rows.forEach((row, idx) => {
-        const entry = {};
-        let valid = true;
-        dbFields.forEach((field) => {
-          const val = row[mapping[field]]?.trim();
-          if (!val) valid = false;
-          entry[field] = val;
+    setImporting(true);
+    setImportProgress(0);
+    setImportError("");
+    const created = [];
+    try {
+      for (let i = 0; i < entries.length; i += IMPORT_CHUNK) {
+        const chunk = entries.slice(i, i + IMPORT_CHUNK);
+        const res = await fetch(`${API_BASE}/clients/bulk`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ items: chunk }),
         });
-        if (valid) imported.push(entry);
-        else skipped.push({ row: idx + 1, data: row });
-      });
-      onImport(imported);
-      setResults({ imported, skipped });
-      setStep("done");
-      setLoading(false);
-    }, 600);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || `Bulk import failed (HTTP ${res.status}).`);
+        created.push(...(data.created || []));
+        setImportProgress(Math.round(((i + chunk.length) / entries.length) * 100));
+      }
+      onImported?.(created);
+      resetImport();
+      return true;
+    } catch (err) {
+      // Earlier chunks may already be saved: report them and drop them from the preview.
+      if (created.length) {
+        onImported?.(created);
+        const saved = new Set(created.map((c) => clientNameKey(c.companyName)));
+        setImportState((st) => ({
+          ...st,
+          rows: st.rows.filter((r) => !saved.has(clientNameKey(r.data.companyName))),
+        }));
+      }
+      setImportError(
+        `${err.message} ${created.length
+          ? `${created.length} of ${entries.length} clients were saved before the error and removed from this list; fix the problem and import again.`
+          : "Nothing was saved."}`
+      );
+      return false;
+    } finally {
+      setImporting(false);
+      setImportProgress(0);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      await downloadClientTemplate();
+    } catch (err) {
+      setImportError(err.message || "Could not create the template.");
+    }
   };
 
   return {
-    fileRef, step, fileData, mapping, results, loading, mappingComplete,
-    reset, handleFile, handleDrop, setFieldMapping,
-    goToUpload, goToMap, goToPreview, handleImport,
+    importState, importParsing, importing, importProgress, importSummary, importError,
+    handleImportFile, confirmImport, handleDownloadTemplate, resetImport,
   };
 };
 
@@ -335,8 +331,9 @@ const useUserManagementBase = ({ availablePages }) => {
     }
   };
 
-  const handleClientImport = useCallback((imported) => {
-    showToast(`${imported.length} client(s) imported.`);
+  // Called by the import dialog with the clients the server actually created.
+  const handleClientImport = useCallback((created) => {
+    showToast(`${created.length} client${created.length === 1 ? "" : "s"} imported.`);
   }, []);
 
   const openClientImport  = () => setClientImportOpen(true);
